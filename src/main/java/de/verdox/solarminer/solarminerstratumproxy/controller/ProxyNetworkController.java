@@ -19,7 +19,7 @@ public class ProxyNetworkController {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onStart() {
-        LOGGER.info("Stratum V1 Proxy is exposed to: "+findLocalIP());
+        LOGGER.info("Stratum V1 Proxy is exposed to: " + findLocalIP());
     }
 
     @GetMapping("/ip")
@@ -50,7 +50,7 @@ public class ProxyNetworkController {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Fehler beim Auslesen der Netzwerkschnittstellen: " + e.getMessage());
+            System.err.println("Could not find ip of this proxy server: " + e.getMessage());
         }
         return "127.0.0.1";
     }
