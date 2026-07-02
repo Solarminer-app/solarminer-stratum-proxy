@@ -48,6 +48,7 @@ jobs:
 
       - name: Build and Publish Spring Boot Native Image
         run: |
+          chmod +x ./gradlew
           ./gradlew clean
           ./gradlew bootBuildImage \
             --imageName=${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }} \
