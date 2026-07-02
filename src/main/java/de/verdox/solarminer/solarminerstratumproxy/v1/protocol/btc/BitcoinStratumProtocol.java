@@ -52,8 +52,19 @@ public class BitcoinStratumProtocol implements MiningProtocol {
                             arrayParams.add(parts[2]);
                         }
 
-                        return node.toString(); // Bereinigte Nachricht zurückgeben
+                        return node.toString();
                     }
+                }
+            }
+        }
+        else if (BitcoinStratumMethods.MINING_SUBMIT.equals(method)) {
+            JsonNode params = node.get("params");
+            String workerName = params.get(0).asText();
+            if (workerName.contains(";")) {
+                String[] parts = workerName.split(";");
+                if (parts.length >= 2) {
+                    ((ArrayNode) params).set(0, mapper.valueToTree(parts[1]));
+                    return node.toString();
                 }
             }
         }
@@ -127,6 +138,11 @@ public class BitcoinStratumProtocol implements MiningProtocol {
             } catch (Exception e) {
                 log.error("Fehler beim Verarbeiten des Reconnect-Befehls", e);
             }
+            return;
+        }
+        if (BitcoinStratumMethods.MINING_SET_DIFFICULTY.equals(method)) {
+            if(targetId.equals(context.getCurrentTargetId()))
+                context.sendToMiner(rawMessage);
             return;
         }
         if (BitcoinStratumMethods.MINING_NOTIFY.equals(method)) {
