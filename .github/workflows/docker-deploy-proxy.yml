@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: solarminer-app/solar-miner-stratum-proxy
+  IMAGE_NAME: ghcr.io/solarminer-app/solar-miner-stratum-proxy
 
 jobs:
   build-and-push:
