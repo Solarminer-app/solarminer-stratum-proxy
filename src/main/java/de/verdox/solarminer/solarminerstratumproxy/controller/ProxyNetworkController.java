@@ -10,6 +10,7 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Enumeration;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 @RestController
@@ -50,7 +51,7 @@ public class ProxyNetworkController {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Could not find ip of this proxy server: " + e.getMessage());
+            LOGGER.log(Level.SEVERE, "Could not find ip of this proxy server: " + e.getMessage(), e);
         }
         return "127.0.0.1";
     }
