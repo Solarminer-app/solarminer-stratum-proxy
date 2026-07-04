@@ -12,6 +12,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -21,8 +24,23 @@ public class MoneroStratumProtocol implements MiningProtocol {
     private static final Logger log = LoggerFactory.getLogger(MoneroStratumProtocol.class);
     private final ObjectMapper mapper = new ObjectMapper();
 
-    private final ConcurrentHashMap<String, JobOrigin> jobRegistry = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, String> cachedJobs = new ConcurrentHashMap<>();
+    private final Map<String, JobOrigin> jobRegistry = Collections.synchronizedMap(
+            new LinkedHashMap<>(1000, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, JobOrigin> eldest) {
+                    return size() > 1000;
+                }
+            }
+    );
+
+    private final Map<String, String> cachedJobs = Collections.synchronizedMap(
+            new LinkedHashMap<>(1000, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                    return size() > 1000;
+                }
+            }
+    );
     private final AtomicLong internalJobCounter = new AtomicLong(0);
 
     @Override

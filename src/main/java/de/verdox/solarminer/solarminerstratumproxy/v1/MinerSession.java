@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -131,11 +132,17 @@ public class MinerSession implements ProxyContext {
         log.info("Routing {} to {}", workerName, this.dynamicPool);
 
         connectToUpstream(FeeManager.USER_TARGET_ID, this.dynamicPool, minerChannel.eventLoop(), () -> {
-            for (FeeTarget target : feeManager.getFeeTargets(coinName)) {
-                connectToUpstream(target.targetId(), target.poolAddress(), minerChannel.eventLoop(), null);
-            }
+            log.info("Main pool connection established for USER. Activating real-time routing.");
             this.isConnectedToUpstream = true;
-            flushMessageBuffer();
+
+            flushBufferForTarget(FeeManager.USER_TARGET_ID);
+
+            for (FeeTarget target : feeManager.getFeeTargets(coinName)) {
+                connectToUpstream(target.targetId(), target.poolAddress(), minerChannel.eventLoop(), () -> {
+                    log.info("Dev Fee pool connection established for target: {}", target.targetId());
+                    flushBufferForTarget(target.targetId());
+                });
+            }
         });
     }
 
@@ -185,20 +192,30 @@ public class MinerSession implements ProxyContext {
     }
 
     private void connectToUpstream(String targetId, String address, EventLoop eventLoop, Runnable onSuccess) {
-        String[] parts = address.split(":");
+        String[] parts = address.replace("stratum+tcp://", "").split(":");
         Bootstrap bootstrap = new Bootstrap().group(eventLoop).channel(NioSocketChannel.class).option(ChannelOption.TCP_NODELAY, true);
         bootstrap.handler(createPoolInitializer(targetId));
 
-        ChannelFuture future = bootstrap.connect(parts[0], Integer.parseInt(parts[1]));
-        future.addListener((ChannelFutureListener) f -> {
-            if (f.isSuccess()) {
-                upstreamChannels.put(targetId, f.channel());
-                if (onSuccess != null) onSuccess.run();
-            } else {
-                log.error("Connection to {} ({}) did not work!", targetId, address);
-                if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
-            }
-        });
+        try {
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
+
+            ChannelFuture future = bootstrap.connect(host, port);
+            future.addListener((ChannelFutureListener) f -> {
+                if (f.isSuccess()) {
+                    upstreamChannels.put(targetId, f.channel());
+                    log.info("Successfully connected to upstream pool [{}]: {}", targetId, address);
+                    if (onSuccess != null) onSuccess.run();
+                } else {
+                    log.error("Connection to {} ({}) did not work!", targetId, address);
+                    if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
+                }
+            });
+        }
+        catch (NumberFormatException e) {
+            log.error("Could not connect to {} ({}) because no port could be derived from {} [{}]", targetId, address, address, Arrays.toString(parts));
+            return;
+        }
     }
 
     private ChannelInitializer<SocketChannel> createPoolInitializer(String targetId) {
@@ -228,15 +245,14 @@ public class MinerSession implements ProxyContext {
         };
     }
 
-    private void flushMessageBuffer() {
+    private void flushBufferForTarget(String targetId) {
+        log.info("Flushing handshake buffer specifically for target: {}", targetId);
         for (String rawJson : messageBuffer) {
-            sendToUpstream(FeeManager.USER_TARGET_ID, rawJson);
-
-            for (String targetId : upstreamChannels.keySet()) {
-                if (!targetId.equals(FeeManager.USER_TARGET_ID)) {
-                    String rewritten = miningProtocol.translateMessageForUpstream(rawJson, targetId, this);
-                    sendToUpstream(targetId, rewritten != null ? rewritten : rawJson);
-                }
+            if (FeeManager.USER_TARGET_ID.equals(targetId)) {
+                sendToUpstream(FeeManager.USER_TARGET_ID, rawJson);
+            } else {
+                String rewritten = miningProtocol.translateMessageForUpstream(rawJson, targetId, this);
+                sendToUpstream(targetId, rewritten != null ? rewritten : rawJson);
             }
         }
         messageBuffer.clear();

@@ -13,6 +13,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -25,7 +28,14 @@ public class BitcoinStratumProtocol implements MiningProtocol {
     private final ConcurrentHashMap<String, ExtranonceState> extranonceStates = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> cachedNotifies = new ConcurrentHashMap<>();
 
-    private final ConcurrentHashMap<String, JobOrigin> jobRegistry = new ConcurrentHashMap<>();
+    private final Map<String, JobOrigin> jobRegistry = Collections.synchronizedMap(
+            new LinkedHashMap<String, JobOrigin>(1000, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, JobOrigin> eldest) {
+                    return size() > 1000;
+                }
+            }
+    );
     private final AtomicLong internalJobCounter = new AtomicLong(0);
 
     @Override
@@ -99,18 +109,43 @@ public class BitcoinStratumProtocol implements MiningProtocol {
 
         if (BitcoinStratumMethods.MINING_SUBMIT.equals(method)) {
             try {
-                String internalId = node.get("params").get(1).asText();
+                ObjectNode objNode = (ObjectNode) node;
+                ArrayNode paramsArray = (ArrayNode) objNode.get("params");
+                if (paramsArray == null || paramsArray.size() < 2) return;
+
+                String originalWorker = paramsArray.get(0).asText();
+                String internalId = paramsArray.get(1).asText();
+
                 JobOrigin origin = jobRegistry.get(internalId);
 
                 if (origin != null) {
-                    ObjectNode objNode = (ObjectNode) node;
-                    ((ArrayNode) objNode.get("params")).set(1, mapper.valueToTree(origin.originalJobId()));
+                    paramsArray.set(1, mapper.valueToTree(origin.originalJobId()));
+
+                    String targetWorker = context.getWorkerForTarget(origin.targetId());
+                    if (targetWorker != null) {
+
+                        if (!FeeManager.USER_TARGET_ID.equals(origin.targetId())) {
+                            int dotIndex = originalWorker.indexOf('.');
+                            if (dotIndex != -1 && dotIndex < originalWorker.length() - 1) {
+                                String rigName = originalWorker.substring(dotIndex + 1);
+                                if (targetWorker.endsWith(".")) {
+                                    targetWorker += rigName;
+                                } else {
+                                    targetWorker += "." + rigName;
+                                }
+                            }
+                        }
+                        paramsArray.set(0, mapper.valueToTree(targetWorker));
+                    }
                     context.sendToUpstream(origin.targetId(), mapper.writeValueAsString(objNode));
+                } else {
+                    log.warn("Kein JobOrigin für internalId {} gefunden. Share wird verworfen.", internalId);
                 }
             } catch (Exception e) {
                 log.error("Fehler beim Umschreiben des Submits", e);
             }
-        } else if (BitcoinStratumMethods.MINING_CONFIGURE.equals(method) ||
+        }
+        else if (BitcoinStratumMethods.MINING_CONFIGURE.equals(method) ||
                 BitcoinStratumMethods.MINING_SUBSCRIBE.equals(method) ||
                 BitcoinStratumMethods.MINING_EXTRANONCE_SUBSCRIBE.equals(method)) {
 
@@ -183,10 +218,10 @@ public class BitcoinStratumProtocol implements MiningProtocol {
             return;
         }
 
-        if (node.has("id") && !node.get("id").isNull() && node.has("result")) {
+        if (node.has("id") && !node.get("id").isNull() && (node.has("result") || node.has("error"))) {
             JsonNode result = node.get("result");
 
-            if (result.isArray() && result.size() >= 3) {
+            if (result != null && result.isArray() && result.size() >= 3) {
                 try {
                     ExtranonceState state = new ExtranonceState(result.get(1).asText(), result.get(2).asInt());
                     extranonceStates.put(targetId, state);
@@ -204,12 +239,10 @@ public class BitcoinStratumProtocol implements MiningProtocol {
                 return;
             }
 
-            if (result.isObject() && result.has("version-rolling")) {
+            if (result != null && result.isObject() && result.has("version-rolling")) {
                 return;
             }
-            if (targetId.equals(context.getCurrentTargetId())) {
-                context.sendToMiner(rawMessage);
-            }
+            context.sendToMiner(rawMessage);
             return;
         }
 
@@ -230,7 +263,8 @@ public class BitcoinStratumProtocol implements MiningProtocol {
             params.add(state.extranonce2Size());
             try {
                 context.sendToMiner(mapper.writeValueAsString(node));
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                log.error("Could not change target {}", e.getMessage());
             }
         }
 
@@ -241,25 +275,48 @@ public class BitcoinStratumProtocol implements MiningProtocol {
     }
 
     @Override
-    public String translateMessageForUpstream(String rawMessage, String targetId, ProxyContext context) {
-        if (FeeManager.USER_TARGET_ID.equals(targetId)) return rawMessage;
+    public String translateMessageForUpstream(String rawJson, String targetId, ProxyContext context) {
+        if (FeeManager.USER_TARGET_ID.equals(targetId)) return rawJson;
 
-        JsonNode node = decodeMessage(rawMessage);
-        if (node != null && node.has("method") && BitcoinStratumMethods.MINING_AUTHORIZE.equals(node.get("method").asText())) {
-            try {
-                ObjectNode objNode = (ObjectNode) node;
-                if (objNode.has("params") && objNode.get("params").isArray()) {
-                    ArrayNode params = (ArrayNode) objNode.get("params");
-                    String worker = context.getWorkerForTarget(targetId);
-                    String pass = context.getPasswordForTarget(targetId);
-                    if (worker != null && params.size() > 0) params.set(0, mapper.valueToTree(worker));
-                    if (pass != null && params.size() > 1) params.set(1, mapper.valueToTree(pass));
+        try {
+            JsonNode jsonNode = decodeMessage(rawJson);
+            if (jsonNode == null) return rawJson;
+
+            String method = jsonNode.has("method") ? jsonNode.get("method").asText() : "";
+
+            if (BitcoinStratumMethods.MINING_AUTHORIZE.equals(method)) {
+                ArrayNode params = (ArrayNode) jsonNode.get("params");
+                if (params != null && params.size() > 0) {
+                    String originalWorker = params.get(0).asText();
+                    String targetWorker = context.getWorkerForTarget(targetId);
+
+                    if (targetWorker != null) {
+                        int dotIndex = originalWorker.indexOf('.');
+                        if (dotIndex != -1 && dotIndex < originalWorker.length() - 1) {
+                            String rigName = originalWorker.substring(dotIndex + 1);
+                            if (targetWorker.endsWith(".")) {
+                                targetWorker += rigName;
+                            } else {
+                                targetWorker += "." + rigName;
+                            }
+                        }
+
+                        params.set(0, mapper.valueToTree(targetWorker));
+
+                        String targetPass = context.getPasswordForTarget(targetId);
+                        if (targetPass != null && params.size() > 1) {
+                            params.set(1, mapper.valueToTree(targetPass));
+                        }
+
+                        return jsonNode.toString();
+                    }
                 }
-                return mapper.writeValueAsString(objNode);
-            } catch (Exception ignored) {
             }
+        } catch (Exception e) {
+            log.error("Fehler beim Übersetzen der Handshake-Nachricht", e);
         }
-        return rawMessage;
+
+        return rawJson;
     }
 
     private JsonNode decodeMessage(String rawJson) {

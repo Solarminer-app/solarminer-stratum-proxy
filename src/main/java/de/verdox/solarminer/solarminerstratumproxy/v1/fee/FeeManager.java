@@ -26,8 +26,7 @@ public class FeeManager {
             totalFeePercentage += target.percentage();
         }
 
-        coinStates.computeIfAbsent(coin, k -> new AtomicReference<>())
-                .set(new State(feeTargets, targetMap, totalFeePercentage));
+        coinStates.computeIfAbsent(coin, k -> new AtomicReference<>()).set(new State(feeTargets, targetMap, totalFeePercentage));
     }
 
     public FeeTarget getTarget(String coin, String targetId) {
@@ -42,13 +41,14 @@ public class FeeManager {
 
     public String rollNextJobTarget(String coin) {
         State currentState = getCoinState(coin);
+
         if (currentState == null || currentState.feeTargets().isEmpty() || currentState.totalFeePercentage() <= 0) {
             return USER_TARGET_ID;
         }
-
         double roll = ThreadLocalRandom.current().nextDouble(100.0);
+        boolean shouldMineForUser = roll >= currentState.totalFeePercentage();
 
-        if (roll >= currentState.totalFeePercentage()) {
+        if (shouldMineForUser) {
             return USER_TARGET_ID;
         }
 

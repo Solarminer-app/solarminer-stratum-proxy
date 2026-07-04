@@ -43,7 +43,7 @@ public class FeeService {
     @Scheduled(fixedRate = 3600000)
     public void scheduledFetch() {
         fetchAndUpdateFees("btc", configuredReferral);
-        fetchAndUpdateFees("xmr", configuredReferral);
+        fetchAndUpdateFees("bitcoin", configuredReferral);
         log.info("Fetched fees from solarminer backend");
     }
 
