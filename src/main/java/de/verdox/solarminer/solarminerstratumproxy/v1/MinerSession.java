@@ -35,6 +35,7 @@ public class MinerSession implements ProxyContext {
     private String dynamicPass;
 
     private Channel minerChannel;
+    private String coinName;
     private final ConcurrentHashMap<String, Channel> upstreamChannels = new ConcurrentHashMap<>();
     private final List<String> messageBuffer = new ArrayList<>();
 
@@ -52,6 +53,7 @@ public class MinerSession implements ProxyContext {
     public void initialize(Channel minerChannel, String coinName) {
         this.miningProtocol = factory.getProtocol(coinName);
         this.minerChannel = minerChannel;
+        this.coinName = coinName;
 
         if (minerChannel.remoteAddress() instanceof java.net.InetSocketAddress inetAddress) {
             this.minerIp = inetAddress.getAddress().getHostAddress();
@@ -59,7 +61,7 @@ public class MinerSession implements ProxyContext {
             this.minerIp = "unknown";
         }
 
-        log.info("New miner connection from: {}", this.minerIp);
+        log.info("New miner connection from: {}", this.minerIp+" ["+coinName+"]");
     }
 
     public void handleMessageFromMiner(String rawJson) {
@@ -129,7 +131,7 @@ public class MinerSession implements ProxyContext {
         log.info("Routing {} to {}", workerName, this.dynamicPool);
 
         connectToUpstream(FeeManager.USER_TARGET_ID, this.dynamicPool, minerChannel.eventLoop(), () -> {
-            for (FeeTarget target : feeManager.getFeeTargets()) {
+            for (FeeTarget target : feeManager.getFeeTargets(coinName)) {
                 connectToUpstream(target.targetId(), target.poolAddress(), minerChannel.eventLoop(), null);
             }
             this.isConnectedToUpstream = true;
@@ -165,20 +167,20 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public String rollNextJobTarget() {
-        return feeManager.rollNextJobTarget();
+        return feeManager.rollNextJobTarget(coinName);
     }
 
     @Override
     public String getWorkerForTarget(String targetId) {
         if (FeeManager.USER_TARGET_ID.equals(targetId) && dynamicWorker != null) return dynamicWorker;
-        FeeTarget target = feeManager.getTarget(targetId);
+        FeeTarget target = feeManager.getTarget(coinName, targetId);
         return target != null ? target.workerName() : null;
     }
 
     @Override
     public String getPasswordForTarget(String targetId) {
         if (FeeManager.USER_TARGET_ID.equals(targetId) && dynamicPass != null) return dynamicPass;
-        FeeTarget target = feeManager.getTarget(targetId);
+        FeeTarget target = feeManager.getTarget(coinName, targetId);
         return target != null ? target.password() : null;
     }
 

@@ -66,8 +66,7 @@ public class FeeService {
             String rawJsonBody = response.body();
 
             FeeResponse feeResponse = objectMapper.readValue(rawJsonBody, FeeResponse.class);
-
-            feeManager.updateTargets(new ArrayList<>(feeResponse.targets()));
+            feeManager.updateTargets(coin, new ArrayList<>(feeResponse.targets()));
         } catch (Exception e) {
             log.error("Backend not reachable: {}", e.getMessage());
         }

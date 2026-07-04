@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -12,11 +13,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class FeeManager {
     public static final String USER_TARGET_ID = "USER";
 
-    private final AtomicReference<State> state = new AtomicReference<>(new State(List.of(), Map.of(), 0.0));
+    private final ConcurrentHashMap<String, AtomicReference<State>> coinStates = new ConcurrentHashMap<>();
 
     private record State(List<FeeTarget> feeTargets, Map<String, FeeTarget> targetMap, double totalFeePercentage) {}
 
-    public void updateTargets(List<FeeTarget> feeTargets) {
+    public void updateTargets(String coin, List<FeeTarget> feeTargets) {
         Map<String, FeeTarget> targetMap = new HashMap<>();
         double totalFeePercentage = 0.0;
 
@@ -25,20 +26,23 @@ public class FeeManager {
             totalFeePercentage += target.percentage();
         }
 
-        this.state.set(new State(feeTargets, targetMap, totalFeePercentage));
+        coinStates.computeIfAbsent(coin, k -> new AtomicReference<>())
+                .set(new State(feeTargets, targetMap, totalFeePercentage));
     }
 
-    public FeeTarget getTarget(String targetId) {
-        return state.get().targetMap().get(targetId);
+    public FeeTarget getTarget(String coin, String targetId) {
+        State state = getCoinState(coin);
+        return state != null ? state.targetMap().get(targetId) : null;
     }
 
-    public List<FeeTarget> getFeeTargets() {
-        return state.get().feeTargets();
+    public List<FeeTarget> getFeeTargets(String coin) {
+        State state = getCoinState(coin);
+        return state != null ? state.feeTargets() : List.of();
     }
 
-    public String rollNextJobTarget() {
-        State currentState = state.get();
-        if (currentState.feeTargets().isEmpty() || currentState.totalFeePercentage() <= 0) {
+    public String rollNextJobTarget(String coin) {
+        State currentState = getCoinState(coin);
+        if (currentState == null || currentState.feeTargets().isEmpty() || currentState.totalFeePercentage() <= 0) {
             return USER_TARGET_ID;
         }
 
@@ -57,5 +61,10 @@ public class FeeManager {
         }
 
         return USER_TARGET_ID;
+    }
+
+    private State getCoinState(String coin) {
+        AtomicReference<State> ref = coinStates.get(coin);
+        return ref != null ? ref.get() : null;
     }
 }
