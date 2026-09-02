@@ -1,8 +1,6 @@
 package de.verdox.solarminer.solarminerstratumproxy.v1.fee;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.Getter;
-import lombok.Setter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -26,8 +24,6 @@ public class FeeService {
     private final ObjectMapper objectMapper;
     private final FeeManager feeManager;
 
-    @Setter
-    @Getter
     private String configuredReferral = "default";
 
     public FeeService(FeeManager feeManager) {
