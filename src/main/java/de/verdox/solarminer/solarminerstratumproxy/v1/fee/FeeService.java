@@ -3,6 +3,7 @@ package de.verdox.solarminer.solarminerstratumproxy.v1.fee;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,11 +25,22 @@ public class FeeService {
     private final ObjectMapper objectMapper;
     private final FeeManager feeManager;
 
-    private String configuredReferral = "default";
+    /**
+     * The referral code whose fee split this proxy instance enforces. Settable via
+     * {@code solarminer.fee.referral} (env: SOLARMINER_FEE_REFERRAL); defaults to
+     * {@code "default"} (house dev fee only). A node that was bought with a
+     * referral code should be configured with that code so the referrer share is
+     * routed under their worker — fee-backend resolves unknown/blank codes to
+     * {@code default} anyway.
+     */
+    private final String configuredReferral;
 
-    public FeeService(FeeManager feeManager) {
+    public FeeService(FeeManager feeManager,
+                      @Value("${solarminer.fee.referral:default}") String configuredReferral) {
         this.feeManager = feeManager;
         this.objectMapper = new ObjectMapper();
+        this.configuredReferral = (configuredReferral == null || configuredReferral.isBlank())
+                ? "default" : configuredReferral.trim();
 
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -36,11 +48,11 @@ public class FeeService {
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    @Scheduled(fixedRate = 3600000)
+    @Scheduled(fixedRateString = "${solarminer.fee.refresh-ms:60000}")
     public void scheduledFetch() {
         fetchAndUpdateFees("btc", configuredReferral);
         fetchAndUpdateFees("bitcoin", configuredReferral);
-        log.info("Fetched fees from solarminer backend");
+        log.debug("Fetched fees from solarminer backend");
     }
 
     public void fetchAndUpdateFees(String coin, String referral) {
