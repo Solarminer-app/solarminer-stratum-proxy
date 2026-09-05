@@ -28,19 +28,19 @@ public class FeeService {
     /**
      * The referral code whose fee split this proxy instance enforces. Settable via
      * {@code solarminer.fee.referral} (env: SOLARMINER_FEE_REFERRAL); defaults to
-     * {@code "default"} (house dev fee only). A node that was bought with a
+     * {@code "solarminer"} (the house dev fee only). A node that was bought with a
      * referral code should be configured with that code so the referrer share is
      * routed under their worker — fee-backend resolves unknown/blank codes to
-     * {@code default} anyway.
+     * {@code solarminer} anyway.
      */
     private final String configuredReferral;
 
     public FeeService(FeeManager feeManager,
-                      @Value("${solarminer.fee.referral:default}") String configuredReferral) {
+                      @Value("${solarminer.fee.referral:solarminer}") String configuredReferral) {
         this.feeManager = feeManager;
         this.objectMapper = new ObjectMapper();
         this.configuredReferral = (configuredReferral == null || configuredReferral.isBlank())
-                ? "default" : configuredReferral.trim();
+                ? "solarminer" : configuredReferral.trim();
 
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))

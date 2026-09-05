@@ -11,7 +11,6 @@ public record FeeResponse(
         @JsonProperty("coin") String coin,
         @JsonProperty("referral") String referral,
         @JsonProperty("totalDevFee") double totalDevFee,
-        @JsonProperty("userDiscount") double userDiscount,
         @JsonProperty("targets") Set<FeeTarget> targets
 ) {
     @JsonCreator
