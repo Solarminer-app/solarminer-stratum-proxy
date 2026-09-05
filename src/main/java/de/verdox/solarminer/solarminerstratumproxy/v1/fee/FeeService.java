@@ -15,15 +15,28 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class FeeService {
     private static final Logger log = LoggerFactory.getLogger(FeeService.class);
     private static final String BACKEND_URL = "https://fee.solarminer.app/api/fees";
+    private static final long TARGET_CACHE_MS = 60_000;
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final FeeManager feeManager;
+
+    /**
+     * On-demand, per-referral target cache serving the node's {@code ?referral=}
+     * reads. Kept separate from {@link FeeManager}'s routing state so an on-demand
+     * lookup for an arbitrary referral never clobbers the targets the proxy uses
+     * to roll jobs for the configured referral.
+     */
+    private final Map<String, CachedTargets> referralTargets = new ConcurrentHashMap<>();
 
     /**
      * The referral code whose fee split this proxy instance enforces. Settable via
@@ -78,5 +91,50 @@ public class FeeService {
         } catch (Exception e) {
             log.error("Backend not reachable: {}", e.getMessage());
         }
+    }
+
+    /**
+     * The fee targets the node reads for a given referral
+     * ({@code GET /api/v1/fees/{coin}/targets?referral=<code>}). For the
+     * <b>configured</b> referral this serves the live routing state (already
+     * polled); for any other referral it fetches the targets on demand from the
+     * backend, cached briefly, without touching the routing state. fee-backend
+     * resolves an unknown code to the house fee, so the response always reflects a
+     * real, routable fee split.
+     */
+    public List<FeeTarget> targetsFor(String coin, String referral) {
+        String c = coin == null ? "" : coin.toLowerCase(Locale.ROOT);
+        if (configuredReferral.equalsIgnoreCase(referral == null ? "" : referral)) {
+            return feeManager.getFeeTargets(c);
+        }
+        String key = c + ":" + (referral == null ? "" : referral.trim().toLowerCase(Locale.ROOT));
+        CachedTargets cached = referralTargets.get(key);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.loadedAt() < TARGET_CACHE_MS) {
+            return cached.targets();
+        }
+        try {
+            String url = String.format("%s?coin=%s&referral=%s", BACKEND_URL, c, referral == null ? "" : referral);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                log.error("Could not fetch fee targets for referral. Status: {}", response.statusCode());
+                return cached != null ? cached.targets() : List.of();
+            }
+            FeeResponse feeResponse = objectMapper.readValue(response.body(), FeeResponse.class);
+            List<FeeTarget> targets = List.copyOf(feeResponse.targets());
+            referralTargets.put(key, new CachedTargets(targets, now));
+            return targets;
+        } catch (Exception e) {
+            log.error("Could not fetch fee targets for referral: {}", e.getMessage());
+            return cached != null ? cached.targets() : List.of();
+        }
+    }
+
+    private record CachedTargets(List<FeeTarget> targets, long loadedAt) {
     }
 }
