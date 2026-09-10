@@ -39,14 +39,16 @@ public class FeeService {
     private final Map<String, CachedTargets> referralTargets = new ConcurrentHashMap<>();
 
     /**
-     * The referral code whose fee split this proxy instance enforces. Settable via
+     * The referral code whose fee split this proxy instance enforces for job
+     * routing (stratum-routed miners). Initialized from
      * {@code solarminer.fee.referral} (env: SOLARMINER_FEE_REFERRAL); defaults to
-     * {@code "solarminer"} (the house dev fee only). A node that was bought with a
-     * referral code should be configured with that code so the referrer share is
-     * routed under their worker — fee-backend resolves unknown/blank codes to
-     * {@code solarminer} anyway.
+     * {@code "solarminer"} (the house dev fee only). Changed at runtime via
+     * {@link #setReferral(String)} — the node's core pushes the site's saved
+     * referral here so the referrer share is routed under their worker for
+     * proxy-routed miners (fee-backend resolves unknown/blank codes to
+     * {@code solarminer} anyway).
      */
-    private final String configuredReferral;
+    private volatile String configuredReferral;
 
     public FeeService(FeeManager feeManager,
                       @Value("${solarminer.fee.referral:solarminer}") String configuredReferral) {
@@ -91,6 +93,24 @@ public class FeeService {
         } catch (Exception e) {
             log.error("Backend not reachable: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Change the referral this proxy enforces for job routing, at runtime. Blank
+     * resets to the house fee ({@code solarminer}). If it actually changed, the
+     * targets are re-fetched immediately so the next rolled job already uses the
+     * new split (no wait for the 60 s poll). Called by the node's core whenever
+     * the site's saved referral changes.
+     */
+    public synchronized void setReferral(String referral) {
+        String normalized = (referral == null || referral.isBlank()) ? "solarminer" : referral.trim();
+        if (normalized.equalsIgnoreCase(configuredReferral)) {
+            return;
+        }
+        configuredReferral = normalized;
+        log.info("Referral for fee routing changed to: {}", normalized);
+        fetchAndUpdateFees("btc", normalized);
+        fetchAndUpdateFees("bitcoin", normalized);
     }
 
     /**
