@@ -1,6 +1,7 @@
 package de.verdox.solarminer.solarminerstratumproxy.v1.fee;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import de.verdox.solarminer.solarminerstratumproxy.v1.routing.ProxyProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,12 +24,14 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class FeeService {
     private static final Logger log = LoggerFactory.getLogger(FeeService.class);
-    private static final String BACKEND_URL = "https://fee.solarminer.app/api/fees";
+    private static final String DEFAULT_BACKEND_URL = "https://fee.solarminer.app/api/fees";
     private static final long TARGET_CACHE_MS = 60_000;
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final FeeManager feeManager;
+    private final ProxyProperties proxyProperties;
+    private final String backendUrl;
 
     /**
      * On-demand, per-referral target cache serving the node's {@code ?referral=}
@@ -49,10 +52,13 @@ public class FeeService {
      * {@code solarminer} anyway).
      */
     private volatile String configuredReferral;
-
     public FeeService(FeeManager feeManager,
-                      @Value("${solarminer.fee.referral:solarminer}") String configuredReferral) {
+                      ProxyProperties proxyProperties,
+                      @Value("${solarminer.fee.referral:solarminer}") String configuredReferral,
+                      @Value("${solarminer.fee.backend-url:" + DEFAULT_BACKEND_URL + "}") String backendUrl) {
         this.feeManager = feeManager;
+        this.proxyProperties = proxyProperties;
+        this.backendUrl = backendUrl;
         this.objectMapper = new ObjectMapper();
         this.configuredReferral = (configuredReferral == null || configuredReferral.isBlank())
                 ? "solarminer" : configuredReferral.trim();
@@ -65,14 +71,17 @@ public class FeeService {
     @EventListener(ApplicationReadyEvent.class)
     @Scheduled(fixedRateString = "${solarminer.fee.refresh-ms:60000}")
     public void scheduledFetch() {
-        fetchAndUpdateFees("btc", configuredReferral);
-        fetchAndUpdateFees("bitcoin", configuredReferral);
+        fetchConfiguredCoinFees(configuredReferral);
         log.debug("Fetched fees from solarminer backend");
+    }
+
+    private void fetchConfiguredCoinFees(String referral) {
+        proxyProperties.getCoins().keySet().forEach(coin -> fetchAndUpdateFees(coin, referral));
     }
 
     public void fetchAndUpdateFees(String coin, String referral) {
         try {
-            String url = String.format("%s?coin=%s&referral=%s", BACKEND_URL, coin, referral != null ? referral : "");
+            String url = String.format("%s?coin=%s&referral=%s", backendUrl, coin, referral != null ? referral : "");
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(10))
@@ -109,8 +118,7 @@ public class FeeService {
         }
         configuredReferral = normalized;
         log.info("Referral for fee routing changed to: {}", normalized);
-        fetchAndUpdateFees("btc", normalized);
-        fetchAndUpdateFees("bitcoin", normalized);
+        fetchConfiguredCoinFees(normalized);
     }
 
     /**
@@ -134,7 +142,7 @@ public class FeeService {
             return cached.targets();
         }
         try {
-            String url = String.format("%s?coin=%s&referral=%s", BACKEND_URL, c, referral == null ? "" : referral);
+            String url = String.format("%s?coin=%s&referral=%s", backendUrl, c, referral == null ? "" : referral);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(10))

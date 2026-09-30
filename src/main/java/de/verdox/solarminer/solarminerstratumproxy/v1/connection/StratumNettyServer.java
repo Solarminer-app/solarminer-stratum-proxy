@@ -11,6 +11,7 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,8 @@ public class StratumNettyServer {
 
     private final ProxyProperties proxyProperties;
     private final StratumChannelInitializer channelInitializer;
+    @Value("${proxy.bind-address:0.0.0.0}")
+    private String bindAddress;
 
     private final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
     private final EventLoopGroup workerGroup = new NioEventLoopGroup();
@@ -45,7 +48,7 @@ public class StratumNettyServer {
             String algoName = entry.getKey();
             int port = entry.getValue().getPort();
 
-            ChannelFuture f = b.bind(port).sync();
+            ChannelFuture f = b.bind(bindAddress, port).sync();
             serverChannels.add(f);
 
             log.info("Started Stratum V1 proxy for '{}' on port {}", algoName, port);

@@ -2,11 +2,13 @@ package de.verdox.solarminer.solarminerstratumproxy.v1.fee;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Set;
 
 @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record FeeResponse(
         @JsonProperty("coin") String coin,
         @JsonProperty("referral") String referral,

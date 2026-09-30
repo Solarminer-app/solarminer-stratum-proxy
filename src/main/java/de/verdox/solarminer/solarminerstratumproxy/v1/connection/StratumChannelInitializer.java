@@ -25,7 +25,7 @@ public class StratumChannelInitializer extends ChannelInitializer<SocketChannel>
     protected void initChannel(SocketChannel ch) {
         int localPort = ch.localAddress().getPort();
         String coinName = determineCoinNameByPort(localPort);
-        ch.pipeline().addLast(new LineBasedFrameDecoder(8192));
+        ch.pipeline().addLast(new LineBasedFrameDecoder(4_194_304));
         ch.pipeline().addLast(new StringDecoder());
         ch.pipeline().addLast(new StringEncoder());
         ch.pipeline().addLast(new MinerInboundHandler(sessionManager, coinName));
