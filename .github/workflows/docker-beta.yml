@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          echo "tag=beta-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
           echo "image=$(./gradlew -q printDockerImage)" >> "$GITHUB_OUTPUT"
 
   test:
@@ -97,7 +97,7 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
           ./gradlew clean bootBuildImage \
-            --imageName="${IMAGE}:${TAG}-${ARCH}" \
+            --imageName="${IMAGE}:${TAG}-${ARCH}-beta" \
             --publishImage \
             -x test \
             --no-daemon
@@ -124,9 +124,17 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx imagetools create \
-            --tag "${IMAGE}:${TAG}" \
-            --tag "${IMAGE}:beta" \
-            "${IMAGE}:${TAG}-amd64" \
-            "${IMAGE}:${TAG}-arm64"
+            --tag "${IMAGE}:latest-amd64-beta" \
+            "${IMAGE}:${TAG}-amd64-beta"
 
-          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest-arm64-beta" \
+            "${IMAGE}:${TAG}-arm64-beta"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG}-beta" \
+            --tag "${IMAGE}:latest-beta" \
+            "${IMAGE}:${TAG}-amd64-beta" \
+            "${IMAGE}:${TAG}-arm64-beta"
+
+          docker buildx imagetools inspect "${IMAGE}:latest-beta"

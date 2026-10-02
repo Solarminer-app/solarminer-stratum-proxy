@@ -3,7 +3,7 @@
 ## 2026-10-02 — Beta Docker publishing
 
 - Scope: `beta` branch container publishing; Stratum wire/fee/discovery contracts unchanged.
-- Change: `.github/workflows/docker-beta.yml` runs `clean check`, builds the native container for amd64 and arm64, then publishes commit-specific and moving `beta` multi-arch tags. It does not publish the production version tag or `latest`.
+- Change: `.github/workflows/docker-beta.yml` runs `clean check`, builds the native container for amd64 and arm64, then publishes commit-specific tags ending in `-beta`, per-architecture tags `latest-amd64-beta` / `latest-arm64-beta`, and the multi-architecture `latest-beta` manifest. It does not publish the production version tag or `latest`.
 - Verification: source/workflow review only; no GitHub Actions run, Docker build or real pool test was run here. Docker Hub secrets and the arm64 runner must be available for a successful publication.
 
 Append dated entries for protocol, fee or discovery changes: owner, wire shape, producer/consumer code evidence, tests, real pool and payout evidence, unsupported combinations, rollout gate, and updated docs.
