@@ -1,0 +1,132 @@
+name: Build and publish Stratum Proxy beta image
+
+on:
+  push:
+    branches:
+      - beta
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stratum-proxy-beta-image
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Read beta image metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      image: ${{ steps.metadata.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Read image name and commit tag
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          echo "tag=beta-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "image=$(./gradlew -q printDockerImage)" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Check proxy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run checks
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean check --no-daemon
+
+  build-and-push:
+    name: Build native beta image (${{ matrix.arch }})
+    needs:
+      - metadata
+      - test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish architecture image
+        shell: bash
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+          IMAGE: ${{ needs.metadata.outputs.image }}
+          ARCH: ${{ matrix.arch }}
+          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKER_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew clean bootBuildImage \
+            --imageName="${IMAGE}:${TAG}-${ARCH}" \
+            --publishImage \
+            -x test \
+            --no-daemon
+
+  publish-manifest:
+    name: Publish beta manifests
+    needs:
+      - metadata
+      - build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create beta and commit-specific manifests
+        shell: bash
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+          IMAGE: ${{ needs.metadata.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG}" \
+            --tag "${IMAGE}:beta" \
+            "${IMAGE}:${TAG}-amd64" \
+            "${IMAGE}:${TAG}-arm64"
+
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
