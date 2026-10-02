@@ -11,18 +11,14 @@ import de.verdox.solarminer.solarminerstratumproxy.v1.routing.JobOrigin;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Pearl JSON-RPC dialect: named job/submit parameters and large opaque proofs. */
+/**
+ * Pearl JSON-RPC dialect: named job/submit parameters and large opaque proofs.
+ */
 @Component("pearlStratumProtocol")
 @Scope("prototype")
 public class PearlStratumProtocol implements MiningProtocol {
@@ -35,11 +31,15 @@ public class PearlStratumProtocol implements MiningProtocol {
     private final Set<String> authorizedTargets = new HashSet<>();
     private JsonNode authorizeId;
 
-    private record PendingSubmit(String targetId, JsonNode minerId) { }
+    private record PendingSubmit(String targetId, JsonNode minerId) {
+    }
 
     private static <K, V> Map<K, V> boundedMap(int max) {
         return Collections.synchronizedMap(new LinkedHashMap<K, V>() {
-            @Override protected boolean removeEldestEntry(Map.Entry<K, V> eldest) { return size() > max; }
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > max;
+            }
         });
     }
 
@@ -62,8 +62,11 @@ public class PearlStratumProtocol implements MiningProtocol {
                     || encoded[1].length() > 256 || !encoded[1].matches("[A-Za-z0-9_-]+")
                     || !encoded[2].matches("[A-Za-z0-9_-]{1,32}")) return rawMessage;
             String pool;
-            try { pool = new String(Base64.getUrlDecoder().decode(encoded[1]), StandardCharsets.UTF_8); }
-            catch (IllegalArgumentException e) { return rawMessage; }
+            try {
+                pool = new String(Base64.getUrlDecoder().decode(encoded[1]), StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e) {
+                return rawMessage;
+            }
             if (!validPool(pool)) return rawMessage;
             context.setDynamicRouting(pool, credential.asText() + "/" + encoded[2], null);
             setCredential(params, credential.asText() + "/" + encoded[2], null);
@@ -75,7 +78,10 @@ public class PearlStratumProtocol implements MiningProtocol {
     @Override
     public void handleMessageFromMiner(String rawMessage, ProxyContext context) {
         ObjectNode message = parse(rawMessage);
-        if (message == null) { context.disconnect(); return; }
+        if (message == null) {
+            context.disconnect();
+            return;
+        }
         String method = method(message);
         if (!context.isConnectedToUpstream()) {
             if ("mining.authorize".equals(method)) context.connectToTargetPool("pearl");
@@ -215,10 +221,14 @@ public class PearlStratumProtocol implements MiningProtocol {
         try {
             JsonNode node = mapper.readTree(raw);
             return node instanceof ObjectNode object ? object : null;
-        } catch (Exception ignored) { return null; }
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
-    private static String method(JsonNode message) { return message.path("method").asText(""); }
+    private static String method(JsonNode message) {
+        return message.path("method").asText("");
+    }
 
     private static boolean validPool(String value) {
         try {
@@ -226,6 +236,8 @@ public class PearlStratumProtocol implements MiningProtocol {
             return ("stratum+tcp".equals(uri.getScheme()) || "stratum+ssl".equals(uri.getScheme()))
                     && uri.getHost() != null && uri.getPort() > 0 && uri.getPort() <= 65535
                     && uri.getUserInfo() == null && (uri.getPath() == null || uri.getPath().isEmpty());
-        } catch (IllegalArgumentException ignored) { return false; }
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
     }
 }

@@ -41,6 +41,7 @@ public class MoneroStratumProtocol implements MiningProtocol {
                 }
             }
     );
+
     private final AtomicLong internalJobCounter = new AtomicLong(0);
 
     @Override
@@ -90,7 +91,7 @@ public class MoneroStratumProtocol implements MiningProtocol {
 
                 if (origin != null) {
                     ((ObjectNode) params).put("job_id", origin.originalJobId());
-                    context.sendToUpstream(origin.targetId(), rawMessage);
+                    context.sendToUpstream(origin.targetId(), mapper.writeValueAsString(node));
                 }
             } catch (Exception e) {
                 log.error("Fehler beim Submit-Umschreiben", e);
@@ -112,16 +113,19 @@ public class MoneroStratumProtocol implements MiningProtocol {
         if (node == null) return;
         String method = node.has("method") ? node.get("method").asText() : "";
 
-        if ("job".equals(method)) {
+        if ("job".equals(method) || hasLoginResultJob(node)) {
             try {
-                JsonNode params = node.get("params");
-                String originalJobId = params.get("job_id").asText();
+                ObjectNode job = getJob(node, method);
+                if (job == null || !job.path("job_id").isTextual()) {
+                    forwardPoolMessage(rawMessage, targetId, context);
+                    return;
+                }
+                String originalJobId = job.get("job_id").asText();
                 String proxyJobId = "xmr-" + internalJobCounter.incrementAndGet();
-
                 jobRegistry.put(proxyJobId, new JobOrigin(targetId, originalJobId));
-                ((ObjectNode) params).put("job_id", proxyJobId);
-
-                cachedJobs.put(targetId, rawMessage);
+                job.put("job_id", proxyJobId);
+                String minerMessage = mapper.writeValueAsString(node);
+                cachedJobs.put(targetId, minerMessage);
 
                 if (FeeManager.USER_TARGET_ID.equals(targetId)) {
                     String nextTarget = context.rollNextJobTarget();
@@ -132,7 +136,7 @@ public class MoneroStratumProtocol implements MiningProtocol {
                 }
 
                 if (targetId.equals(context.getCurrentTargetId())) {
-                    context.sendToMiner(rawMessage);
+                    context.sendToMiner(minerMessage);
                 }
             } catch (Exception e) {
                 log.error("Fehler beim Job-Forwarding", e);
@@ -140,9 +144,7 @@ public class MoneroStratumProtocol implements MiningProtocol {
             return;
         }
 
-        if (targetId.equals(context.getCurrentTargetId())) {
-            context.sendToMiner(rawMessage);
-        }
+        forwardPoolMessage(rawMessage, targetId, context);
     }
 
     @Override
@@ -181,5 +183,18 @@ public class MoneroStratumProtocol implements MiningProtocol {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private boolean hasLoginResultJob(JsonNode node) {
+        return node.has("result") && node.path("result").path("job").isObject();
+    }
+
+    private ObjectNode getJob(JsonNode node, String method) {
+        JsonNode candidate = "job".equals(method) ? node.path("params") : node.path("result").path("job");
+        return candidate instanceof ObjectNode object ? object : null;
+    }
+
+    private void forwardPoolMessage(String rawMessage, String targetId, ProxyContext context) {
+        if (targetId.equals(context.getCurrentTargetId())) context.sendToMiner(rawMessage);
     }
 }
