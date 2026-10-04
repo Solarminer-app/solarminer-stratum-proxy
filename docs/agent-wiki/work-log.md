@@ -1,5 +1,10 @@
 # Agent work log
 
+## 2026-10-03 — Kryptex RVN/ETC user-pool login
+
+- Contract: the GPU adapter recognizes decoded user-pool hosts under `*.kryptex.network` and forwards `WALLET/WORKER` on authorize; other pools retain the prepared `WALLET.WORKER` format. Fee-target logins remain those from the fee backend. The PC-Agent still emits the same encoded `sm1` envelope.
+- Evidence: Kryptex's official [RVN](https://pool.kryptex.com/rvn) and [ETC](https://pool.kryptex.com/etc) pages publish wallet/worker and TCP ports 7031/7033. `GpuStratumProtocolTest` covers both rewrites synthetically. Real SRBMiner submit, accepted user/house shares, fee switching and pool credits remain open; the code does not establish production support.
+
 ## 2026-10-03 — RVN / ETC Stratum feasibility probes, no listener enabled
 
 - Owner: proxy protocol boundary. Local SRBMiner-MULTI 3.7.1 fake-pool captures and read-only live 2Miners probes recorded RVN KAWPOW and ETC ETCHash handshakes; see the [integration record](../../../Solar-Miner-Node/docs/agent-wiki/rvn-etc-integration.md). RVN receives `mining.set_target` and an eight-element notify; ETC receives `mining.set_difficulty`, `mining.set_extranonce` and a four-element notify. Both subscribe and authorize shapes differ. This rules out blindly selecting the existing BTC/Pearl protocol.
@@ -28,3 +33,13 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
 - Existing working-tree edits: this file already had a whitespace-only change; `PearlStratumProtocol.java` had unrelated formatting changes. They are preserved.
 - Verification: source/diff inspection only. No tests/build/live pool were run in this task. Fake-pool job→submit round trip, exact login-result fixtures, unknown/stale IDs, target switching and real accepted user/house/referral shares remain open.
 - Status: locally implemented; B06 integration gates remain open. Next: characterize actual XMR login-result shape and add deterministic fake-pool round-trip coverage before live-pool accounting.
+
+## 2026-10-03 — Kryptex RVN Subscribe-Form im GPU-Adapter
+
+- Live-Probe über den eingebetteten Proxy: Kryptex RVN antwortete auf Subscribe mit `[null,"605132"]`, danach mit erfolgreicher Autorisierung und `mining.set_target`. Der GPU-Adapter las für RVN nur Feld 0 als Extranonce und gab deshalb keinen Notify-Job an den Miner weiter. Der Adapter verwendet jetzt Feld 1, falls Feld 0 kein Text ist; die bestehende 2Miners-Form bleibt erhalten.
+- Verifikation: `GpuStratumProtocolTest` mit beiden Subscribe-Formen unter JDK 21 offline erfolgreich. Nach PC-Agent-Neustart lieferte eine erneute Live-Probe `mining.notify` über RVN-Port 3336. ETC lieferte bereits Difficulty und Notify über Port 3337. Es gab keinen realen Submit oder akzeptierten User-/House-/Referral-Share; beide Coins bleiben gesperrt. Siehe [Node-Integrationsprotokoll](../../../Solar-Miner-Node/docs/agent-wiki/rvn-etc-integration.md).
+
+## 2026-10-04 — SRBMiner-Subscribe vor dynamischer Pool-Wahl
+
+- Ursache: SRBMiner 3.7.0 wartet auf die Antwort zu `mining.subscribe` (id 1), bevor es `mining.authorize` (id 2) mit dem codierten Pool-Ziel sendet. Der GPU-Adapter verband den Upstream erst nach Authorize und ließ Subscribe unbeantwortet; der Miner meldete nach 15 Sekunden Pool-Timeout.
+- Der GPU-Adapter sendet nun sofort eine vorläufige RVN- bzw. ETC-Subscribe-Antwort. Nach dem echten Upstream-Subscribe überträgt er dessen Extranonce als `mining.set_extranonce` und unterdrückt die doppelte Subscribe-Antwort. Der Fee-Ziel- und Submit-Ursprungscode blieb unverändert. Gezielte `GpuStratumProtocolTest`-Tests unter JDK 21 bestehen. Der neu gestartete PC-Agent mit eingebettetem Proxy erhielt live RVN- und ETC-Jobs von Kryptex; SRBMiner meldete aber auf diesem Host unabhängig vom Proxy einen GPU-Epoch-Fehler und 0 H/s. Keine Shares, Fee-Umschaltung oder Auszahlung verifiziert; keine Produktionsfreigabe. [Integrationsrecord](../../../Solar-Miner-Node/docs/agent-wiki/rvn-etc-integration.md).

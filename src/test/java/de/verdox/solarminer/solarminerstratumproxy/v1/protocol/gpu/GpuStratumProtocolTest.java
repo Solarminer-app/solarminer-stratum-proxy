@@ -19,6 +19,28 @@ class GpuStratumProtocolTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
+    void subscribeUnblocksSrbMinerBeforeDynamicAuthorizeForBothCoins() throws Exception {
+        for (GpuStratumProtocol protocol : List.of(new RavencoinStratumProtocol(), new EthereumClassicStratumProtocol())) {
+            FakeContext context = new FakeContext(protocol, "worker");
+            protocol.handleMessageFromMiner("{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"SRBMiner-MULTI/3.7.0\"]}", context);
+            assertEquals(1, context.toMiner.size());
+            assertEquals("00", json(context.toMiner.getLast()).path("result").path(1).asText());
+            assertFalse(context.connected);
+
+            protocol.handleMessageFromMiner("{\"id\":2,\"method\":\"mining.authorize\",\"params\":[\"worker\",\"x\"]}", context);
+            assertTrue(context.connected);
+            String realReply = protocol.coin().equals("ravencoin")
+                    ? "{\"id\":1,\"result\":[null,\"605132\"],\"error\":null}"
+                    : "{\"id\":1,\"result\":[[\"mining.notify\",\"session\",\"EthereumStratum/1.0.0\"],\"36f4\"],\"error\":null}";
+            protocol.handleMessageFromPool(realReply, FeeManager.USER_TARGET_ID, context);
+            assertEquals(2, context.toMiner.size());
+            assertEquals("mining.set_extranonce", json(context.toMiner.getLast()).path("method").asText());
+            assertEquals(protocol.coin().equals("ravencoin") ? "605132" : "36f4",
+                    json(context.toMiner.getLast()).path("params").path(0).asText());
+        }
+    }
+
+    @Test
     void ravencoinKeepsTargetAndSubmitWithTheOriginPool() throws Exception {
         exercise(new de.verdox.solarminer.solarminerstratumproxy.v1.protocol.gpu.RavencoinStratumProtocol(), "ravencoin",
                 "RHUC17zAVjNqXDtkqwLPRvQ2XgoRZsXeeG", "mining.set_target",
@@ -28,12 +50,46 @@ class GpuStratumProtocolTest {
     }
 
     @Test
+    void ravencoinKryptexSubscribeWithNullFirstFieldStillForwardsJobs() throws Exception {
+        GpuStratumProtocol protocol = new RavencoinStratumProtocol();
+        FakeContext context = new FakeContext(protocol, "RHUC17zAVjNqXDtkqwLPRvQ2XgoRZsXeeG");
+        context.connected = true;
+        protocol.handleMessageFromPool("{\"id\":1,\"result\":[null,\"605132\"],\"error\":null}",
+                FeeManager.USER_TARGET_ID, context);
+        protocol.handleMessageFromPool("{\"id\":2,\"result\":true,\"error\":null}",
+                FeeManager.USER_TARGET_ID, context);
+        protocol.handleMessageFromPool(event("mining.set_target", "[\"00000000ffff0000000000000000000000000000000000000000000000000000\"]"),
+                FeeManager.USER_TARGET_ID, context);
+        protocol.handleMessageFromPool(event("mining.notify", "[\"job\",\"header\",\"seed\",\"target\",true,4564346,\"1b079cef\"]"),
+                FeeManager.USER_TARGET_ID, context);
+        assertEquals("mining.notify", json(context.toMiner.getLast()).path("method").asText());
+    }
+
+    @Test
     void etcKeepsDifficultyAndSubmitWithTheOriginPool() throws Exception {
         exercise(new EthereumClassicStratumProtocol(), "ethereumclassic",
                 "0xa6e43E5D497ce1f4d28b4270630E97308eDA8b3e", "mining.set_difficulty",
                 "[1.999969]", "[[\"mining.notify\",\"session\",\"EthereumStratum/1.0.0\"],\"36f4\"]",
                 "[[\"mining.notify\",\"fee-session\",\"EthereumStratum/1.0.0\"],\"41a2\"]",
                 "[\"job\",\"seed\",\"header\",true]");
+    }
+
+    @Test
+    void kryptexUsesSlashSeparatedWalletAndWorkerForBothGpuCoins() throws Exception {
+        for (GpuStratumProtocol protocol : List.of(new RavencoinStratumProtocol(), new EthereumClassicStratumProtocol())) {
+            String wallet = protocol.coin().equals("ravencoin")
+                    ? "RHUC17zAVjNqXDtkqwLPRvQ2XgoRZsXeeG"
+                    : "0xa6e43E5D497ce1f4d28b4270630E97308eDA8b3e";
+            String pool = protocol.coin().equals("ravencoin")
+                    ? "stratum+tcp://rvn.kryptex.network:7031" : "stratum+tcp://etc.kryptex.network:7033";
+            String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(pool.getBytes(StandardCharsets.UTF_8));
+            FakeContext context = new FakeContext(protocol, wallet);
+            String login = "{\"id\":2,\"method\":\"mining.authorize\",\"params\":[\""
+                    + wallet + ".sm1." + encoded + ".rig\",\"x\"]}";
+            JsonNode rewritten = json(protocol.interceptMessageFromMiner(login, context));
+            assertEquals(wallet + "/rig", rewritten.path("params").path(0).asText());
+            assertEquals(pool, context.pool);
+        }
     }
 
     private void exercise(GpuStratumProtocol protocol, String coin, String wallet, String targetMethod,

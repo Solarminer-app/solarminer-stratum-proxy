@@ -23,7 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * SRBMiner / 2Miners JSON-RPC family. RVN and ETC retain separate registered
  * protocol instances because their subscribe, target and notify shapes differ.
- * No production listener is configured until real submit and fee-switch tests pass.
+ * The embedded agent exposes local listeners; production rollout still needs real
+ * submit and fee-switch verification.
  */
 abstract class GpuStratumProtocol implements MiningProtocol {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -35,6 +36,7 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     private final Map<String, String> currentTarget = new HashMap<>();
     private final Map<String, String> extranonces = new HashMap<>();
     private final Set<String> authorized = new HashSet<>();
+    private boolean provisionalSubscribeSent;
 
     private record PendingSubmit(JsonNode minerId) { }
 
@@ -68,7 +70,9 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         try { pool = new String(Base64.getUrlDecoder().decode(encoded[0]), StandardCharsets.UTF_8); }
         catch (IllegalArgumentException e) { context.disconnect(); return raw; }
         if (!validPool(pool)) { context.disconnect(); return raw; }
-        String worker = wallet + "." + encoded[1];
+        URI poolUri = URI.create(pool.contains("://") ? pool : "stratum+tcp://" + pool);
+        String separator = poolUri.getHost().endsWith(".kryptex.network") ? "/" : ".";
+        String worker = wallet + separator + encoded[1];
         context.setDynamicRouting(pool, worker, params.get(1).asText());
         ((ArrayNode) params).set(0, mapper.valueToTree(worker));
         return message.toString();
@@ -80,6 +84,20 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         if (message == null) { context.disconnect(); return; }
         String method = method(message);
         if (!context.isConnectedToUpstream()) {
+            if ("mining.subscribe".equals(method) && !provisionalSubscribeSent && message.hasNonNull("id")) {
+                // SRBMiner waits for this reply before it sends authorize, which carries
+                // the dynamic pool route. Replace the provisional nonce once the real
+                // upstream subscription is available.
+                ObjectNode response = mapper.createObjectNode();
+                response.set("id", message.path("id").deepCopy());
+                response.putNull("error");
+                ArrayNode result = response.putArray("result");
+                if ("ravencoin".equals(coin())) result.addNull();
+                else result.addArray().add("mining.notify").add("solarminer").add("EthereumStratum/1.0.0");
+                result.add("00");
+                provisionalSubscribeSent = true;
+                context.sendToMiner(response.toString());
+            }
             if ("mining.authorize".equals(method)) context.connectToTargetPool(coin());
             return;
         }
@@ -159,8 +177,19 @@ abstract class GpuStratumProtocol implements MiningProtocol {
             }
             if (id.isIntegralNumber() && id.asLong() == 1 && message.path("result").isArray()) {
                 JsonNode result = message.path("result");
-                JsonNode nonce = "ravencoin".equals(coin()) ? result.path(0) : result.path(1);
-                if (nonce.isTextual()) extranonces.put(targetId, nonce.asText());
+                JsonNode nonce = "ravencoin".equals(coin())
+                        ? (result.path(0).isTextual() ? result.path(0) : result.path(1))
+                        : result.path(1);
+                if (nonce.isTextual()) {
+                    extranonces.put(targetId, nonce.asText());
+                    if (provisionalSubscribeSent && targetId.equals(context.getCurrentTargetId())) {
+                        ObjectNode update = mapper.createObjectNode();
+                        update.putNull("id");
+                        update.put("method", "mining.set_extranonce");
+                        update.putArray("params").add(nonce.asText());
+                        context.sendToMiner(update.toString());
+                    }
+                }
             }
             if (id.isIntegralNumber() && id.asLong() == 2) {
                 if (message.path("result").asBoolean(false) && message.path("error").isNull()) authorized.add(targetId);
@@ -173,7 +202,9 @@ abstract class GpuStratumProtocol implements MiningProtocol {
             // A reply carrying one of our rewritten submit IDs is meaningful only
             // when the matching origin target owns the pending request.
             if (id.isIntegralNumber() && id.asLong() > 1_000_000) return;
-            if (FeeManager.USER_TARGET_ID.equals(targetId)) context.sendToMiner(raw);
+            if (FeeManager.USER_TARGET_ID.equals(targetId)
+                    && !(provisionalSubscribeSent && id.isIntegralNumber() && id.asLong() == 1))
+                context.sendToMiner(raw);
             return;
         }
         if (targetId.equals(context.getCurrentTargetId())) context.sendToMiner(raw);
