@@ -210,6 +210,7 @@ public class PearlStratumProtocol implements MiningProtocol {
     }
 
     private void reject(ObjectNode request, ProxyContext context, int code, String reason) {
+        context.recordLocalReject(reason);
         ObjectNode response = mapper.createObjectNode();
         response.set("id", request.path("id").deepCopy());
         response.putNull("result");

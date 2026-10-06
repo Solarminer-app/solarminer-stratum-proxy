@@ -26,4 +26,6 @@ public interface ProxyContext {
     void reconnectToTarget(String targetId, String s);
 
     void setDynamicRouting(String targetPool, String workerName, String password);
+
+    default void recordLocalReject(String reason) { }
 }

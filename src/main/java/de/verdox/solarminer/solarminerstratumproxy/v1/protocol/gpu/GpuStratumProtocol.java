@@ -50,6 +50,14 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     abstract boolean validWallet(String wallet);
     abstract String targetMethod();
 
+    /** Reply shape sent before dynamic pool routing is known; coin dialects may override it. */
+    protected ArrayNode provisionalSubscription() {
+        ArrayNode result = mapper.createArrayNode();
+        if ("ravencoin".equals(coin())) result.addNull();
+        else result.addArray().add("mining.notify").add("solarminer").add("EthereumStratum/1.0.0");
+        return result.add("00");
+    }
+
     @Override
     public String interceptMessageFromMiner(String raw, ProxyContext context) {
         ObjectNode message = parse(raw);
@@ -91,10 +99,7 @@ abstract class GpuStratumProtocol implements MiningProtocol {
                 ObjectNode response = mapper.createObjectNode();
                 response.set("id", message.path("id").deepCopy());
                 response.putNull("error");
-                ArrayNode result = response.putArray("result");
-                if ("ravencoin".equals(coin())) result.addNull();
-                else result.addArray().add("mining.notify").add("solarminer").add("EthereumStratum/1.0.0");
-                result.add("00");
+                response.set("result", provisionalSubscription());
                 provisionalSubscribeSent = true;
                 context.sendToMiner(response.toString());
             }
@@ -186,7 +191,8 @@ abstract class GpuStratumProtocol implements MiningProtocol {
                         ObjectNode update = mapper.createObjectNode();
                         update.putNull("id");
                         update.put("method", "mining.set_extranonce");
-                        update.putArray("params").add(nonce.asText());
+                        ArrayNode updateParams = update.putArray("params").add(nonce.asText());
+                        if (result.size() > 2 && result.path(2).canConvertToInt()) updateParams.add(result.path(2).asInt());
                         context.sendToMiner(update.toString());
                     }
                 }
@@ -256,6 +262,7 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     }
 
     private void reject(ObjectNode request, ProxyContext context, String reason) {
+        context.recordLocalReject(reason);
         ObjectNode response = mapper.createObjectNode();
         response.set("id", request.path("id").deepCopy());
         response.put("result", false);

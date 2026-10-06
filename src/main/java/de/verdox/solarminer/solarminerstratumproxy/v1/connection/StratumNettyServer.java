@@ -13,8 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
 @Service
@@ -30,7 +29,7 @@ public class StratumNettyServer {
     private final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
     private final EventLoopGroup workerGroup = new NioEventLoopGroup();
 
-    private final List<ChannelFuture> serverChannels = new ArrayList<>();
+    private final ConcurrentHashMap<String, ChannelFuture> serverChannels = new ConcurrentHashMap<>();
 
     public StratumNettyServer(ProxyProperties proxyProperties, StratumChannelInitializer channelInitializer) {
         this.proxyProperties = proxyProperties;
@@ -49,10 +48,20 @@ public class StratumNettyServer {
             int port = entry.getValue().getPort();
 
             ChannelFuture f = b.bind(bindAddress, port).sync();
-            serverChannels.add(f);
+            serverChannels.put(algoName, f);
 
             log.info("Started Stratum V1 proxy for '{}' on port {}", algoName, port);
         }
+    }
+
+    public String listenerStatus(String coin) {
+        ChannelFuture channel = serverChannels.get(coin);
+        return channel != null && channel.channel().isActive() ? "online" : "offline";
+    }
+
+    public int port(String coin) {
+        ProxyProperties.CoinConfig config = proxyProperties.getCoins().get(coin);
+        return config == null ? 0 : config.getPort();
     }
 
     @PreDestroy

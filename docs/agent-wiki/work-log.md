@@ -1,5 +1,11 @@
 # Agent work log
 
+## 2026-10-06 — Decred Haste adapter, fee route remains disabled
+
+- Owner: GPU Stratum adapter. Added a Decred protocol bean and local listener on 3338. The provisional `mining.subscribe` reply follows the published Haste shape (difficulty/notify subscription IDs, 12-byte extranonce2 field); the upstream extranonce and length are passed to the miner after the selected pool replies.
+- The adapter reuses the JSON-RPC job-origin and submit routing, maps `mining.set_difficulty`, and validates DCR mainnet address prefix syntax. Suprnova publishes an SRBMiner `blake3_decred` endpoint, but its exact wire behavior has not been captured against this adapter. The PC-Agent now enables any coin only when the fee service returns a valid SolarMiner house target; no DCR target currently exists, so it remains unavailable automatically.
+- Evidence: source review plus the Haste protocol reference and Suprnova setup page. No tests, pool session, accepted share, fee switch, accounting, or payout were verified. Keep production fee routing disabled until those gates pass.
+
 ## 2026-10-03 — Kryptex RVN/ETC user-pool login
 
 - Contract: the GPU adapter recognizes decoded user-pool hosts under `*.kryptex.network` and forwards `WALLET/WORKER` on authorize; other pools retain the prepared `WALLET.WORKER` format. Fee-target logins remain those from the fee backend. The PC-Agent still emits the same encoded `sm1` envelope.
@@ -43,3 +49,35 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
 
 - Ursache: SRBMiner 3.7.0 wartet auf die Antwort zu `mining.subscribe` (id 1), bevor es `mining.authorize` (id 2) mit dem codierten Pool-Ziel sendet. Der GPU-Adapter verband den Upstream erst nach Authorize und ließ Subscribe unbeantwortet; der Miner meldete nach 15 Sekunden Pool-Timeout.
 - Der GPU-Adapter sendet nun sofort eine vorläufige RVN- bzw. ETC-Subscribe-Antwort. Nach dem echten Upstream-Subscribe überträgt er dessen Extranonce als `mining.set_extranonce` und unterdrückt die doppelte Subscribe-Antwort. Der Fee-Ziel- und Submit-Ursprungscode blieb unverändert. Gezielte `GpuStratumProtocolTest`-Tests unter JDK 21 bestehen. Der neu gestartete PC-Agent mit eingebettetem Proxy erhielt live RVN- und ETC-Jobs von Kryptex; SRBMiner meldete aber auf diesem Host unabhängig vom Proxy einen GPU-Epoch-Fehler und 0 H/s. Keine Shares, Fee-Umschaltung oder Auszahlung verifiziert; keine Produktionsfreigabe. [Integrationsrecord](../../../Solar-Miner-Node/docs/agent-wiki/rvn-etc-integration.md).
+## 2026-10-06 — Quantus (QTC) Stratum adapter prepared
+
+- Added a canonical `quantusStratumProtocol` bean on listener port `3339`, using
+  the shared GPU JSON-RPC job/submit-origin router and `mining.set_difficulty`.
+  PC-Agent's standalone proxy launches the same listener.
+- Declared API, discovery and all configured Stratum listener ports in Dockerfile
+  image metadata. This is not a host firewall or `docker run -p` publication;
+  deployment still must publish TCP 3339 to make external PC-Agents reach it.
+- Candidate pool is Kryptex QTC (SRBMiner-compatible JSON-RPC Stratum); the
+  Quantus native pool's WebSocket protocol and Quantus node miner's QUIC
+  protocol are intentionally outside this Stratum adapter.
+- No fee-backend QTC target exists because the SolarMiner QTC payout wallet is
+  pending. PC-Agent enforces house-target readiness before miner start.
+- Verification not run. No real subscribe/login/job/submit, accepted share,
+  fee switch, pool credit or payout was verified; no production enablement.
+
+## 2026-10-06 — Read-only Stratum operations dashboard
+
+- Added a modern English dashboard at the proxy root and read-only `/api/dashboard` plus `/api/dashboard/console` endpoints. It reports configured listeners, connected miner sessions, per-target active upstreams, job-routing share, accepted/rejected shares, average share difficulty, and estimated hashrate.
+- The in-memory telemetry observer retains no raw Stratum payloads. Currency snapshots are fetched from the public Currency Service in the background, cached for ten minutes, and used with accepted share work to estimate gross native-coin and USD value per hour. Estimates are hidden for missing or stale snapshots; they are not pool-account credits or payout records. Hashrate conversion is only enabled for algorithms with a configured share-difficulty unit; other coin rates remain unavailable rather than guessed.
+- Console events are bounded, metadata-only, and redact credential-like fields. Upstream destinations are displayed as host and port without URL credentials. The UI is read-only and does not expose worker names, wallet data, or pool passwords.
+- Verification: implementation/source inspection only; no tests, build, browser session, Currency Service live call, or real pool/accounting behavior was run in this task. Share response formats and difficulty units still need pool-specific fixtures before the corresponding estimate can be treated as accurate.
+
+## 2026-10-06 — Dashboard mount path for the embedded PC-Agent
+
+- Adjusted dashboard asset and API URLs to be relative, so the same page serves both at standalone proxy `/` and when mounted by PC-Agent at `/proxy-dashboard/`. The PC-Agent reverse route only forwards the dashboard's read-only endpoints; local embedded proxy listeners remain bound to `127.0.0.1:8090`.
+- Verification: source inspection and `git diff --check` only; embedded-PC-Agent browser reachability remains unverified.
+
+## 2026-10-06 — Embedded dashboard has a dedicated asset/API path
+
+- Added `/embedded-dashboard/` asset serving from `static/proxy-dashboard/` plus API aliases under `/embedded-dashboard/api/dashboard[/**]`. This avoids the PC-Agent `static/index.html` winning the shared classpath root in the embedded runtime. The standalone dashboard still uses `/` and `/api/dashboard`.
+- PC-Agent Gradle packaging copies the proxy assets into the dedicated resource path; successful `:pc-agent:compileJava :pc-agent:embeddedProxyClasses --offline --no-daemon` confirms compile and resource processing. A live browser request remains unverified.

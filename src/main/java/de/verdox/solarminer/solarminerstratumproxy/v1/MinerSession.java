@@ -2,6 +2,7 @@ package de.verdox.solarminer.solarminerstratumproxy.v1;
 
 import de.verdox.solarminer.solarminerstratumproxy.v1.fee.FeeManager;
 import de.verdox.solarminer.solarminerstratumproxy.v1.fee.FeeTarget;
+import de.verdox.solarminer.solarminerstratumproxy.monitoring.ProxyTelemetryService;
 import de.verdox.solarminer.solarminerstratumproxy.v1.protocol.MiningProtocolFactory;
 import de.verdox.solarminer.solarminerstratumproxy.v1.routing.ProxyProperties;
 import io.netty.bootstrap.Bootstrap;
@@ -34,6 +35,7 @@ public class MinerSession implements ProxyContext {
     private MiningProtocol miningProtocol;
     private final FeeManager feeManager;
     private final MiningProtocolFactory factory;
+    private final ProxyTelemetryService telemetry;
     @Value("${proxy.fee.required:false}")
     private boolean feeRequired;
 
@@ -50,11 +52,14 @@ public class MinerSession implements ProxyContext {
     private String currentTargetId = FeeManager.USER_TARGET_ID;
 
     private String minerIp;
+    private String telemetrySessionId;
 
-    public MinerSession(FeeManager feeManager, MiningProtocolFactory factory, ProxyProperties proxyProperties) {
+    public MinerSession(FeeManager feeManager, MiningProtocolFactory factory, ProxyProperties proxyProperties,
+                        ProxyTelemetryService telemetry) {
         this.feeManager = feeManager;
         this.factory = factory;
         this.proxyProperties = proxyProperties;
+        this.telemetry = telemetry;
     }
 
     public void initialize(Channel minerChannel, String coinName) {
@@ -69,6 +74,7 @@ public class MinerSession implements ProxyContext {
         }
 
         log.info("New miner connection from: {}", this.minerIp+" ["+coinName+"]");
+        this.telemetrySessionId = telemetry.connected(coinName, minerIp);
     }
 
     public void handleMessageFromMiner(String rawJson) {
@@ -82,6 +88,8 @@ public class MinerSession implements ProxyContext {
 
     public void handleMessageFromPool(String rawJson, String targetId) {
         if (feeRequired && !feeTargetsReady()) { disconnect(); return; }
+        telemetry.poolMessage(telemetrySessionId, targetId, rawJson);
+        telemetry.upstreamResponse(telemetrySessionId, targetId, rawJson);
         log.debug("Pool [{}] -> Proxy: {} characters", targetId, rawJson.length());
         miningProtocol.handleMessageFromPool(rawJson, targetId, this);
     }
@@ -97,13 +105,18 @@ public class MinerSession implements ProxyContext {
         this.dynamicPool = pool;
         this.dynamicWorker = worker;
         this.dynamicPass = pass;
+        telemetry.userPool(telemetrySessionId, pool);
     }
+
+    @Override
+    public void recordLocalReject(String reason) { telemetry.localReject(telemetrySessionId, reason); }
 
     @Override
     public void sendToUpstream(String targetId, String message) {
         log.debug("Proxy -> Pool[{}]: {} characters", targetId, message.length());
         Channel targetChannel = upstreamChannels.get(targetId);
         if (targetChannel != null && targetChannel.isActive()) {
+            telemetry.upstreamRequest(telemetrySessionId, targetId, message);
             targetChannel.writeAndFlush(message + "\n");
         }
     }
@@ -169,6 +182,7 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public void disconnect() {
+        telemetry.disconnected(telemetrySessionId);
         if (minerChannel != null && minerChannel.isActive()) minerChannel.close();
         upstreamChannels.values().forEach(Channel::close);
         upstreamChannels.clear();
@@ -189,13 +203,16 @@ public class MinerSession implements ProxyContext {
         if (!this.currentTargetId.equals(targetId)) {
             log.info("Switch: {} -> {}", this.currentTargetId, targetId);
             this.currentTargetId = targetId;
+            telemetry.currentTarget(telemetrySessionId, targetId);
             miningProtocol.onTargetChanged(targetId, this);
         }
     }
 
     @Override
     public String rollNextJobTarget() {
-        return feeManager.rollNextJobTarget(coinName);
+        String selected = feeManager.rollNextJobTarget(coinName);
+        telemetry.assignedJob(telemetrySessionId, selected);
+        return selected;
     }
 
     @Override
@@ -246,24 +263,30 @@ public class MinerSession implements ProxyContext {
                         sslHandler.handshakeFuture().addListener(handshake -> {
                             if (handshake.isSuccess()) {
                                 upstreamChannels.put(targetId, f.channel());
+                                telemetry.upstream(telemetrySessionId, targetId, true, safeAddress(host, port));
                                 if (onSuccess != null) onSuccess.run();
                             } else {
                                 log.error("TLS handshake failed for target {}", targetId);
+                                telemetry.upstream(telemetrySessionId, targetId, false, "TLS handshake failed");
                                 f.channel().close();
                                 if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
                             }
                         });
                     } else {
                         upstreamChannels.put(targetId, f.channel());
+                        telemetry.upstream(telemetrySessionId, targetId, true, safeAddress(host, port));
                         if (onSuccess != null) onSuccess.run();
                     }
                     log.info("Successfully connected to upstream pool [{}]: {}", targetId, address);
                 } else {
-                    log.error("Connection to {} ({}) did not work!", targetId, address);
+                    log.error("Connection to {} ({}) did not work!", targetId, safeAddress(host, port));
+                    telemetry.upstream(telemetrySessionId, targetId, false, "Connection failed · " + safeAddress(host, port));
                     if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
                 }
             });
     }
+
+    private static String safeAddress(String host, int port) { return host + ":" + port; }
 
     private ChannelInitializer<SocketChannel> createPoolInitializer(String targetId, SslContext sslContext, String host, int port) {
         return new ChannelInitializer<SocketChannel>() {
@@ -281,6 +304,7 @@ public class MinerSession implements ProxyContext {
 
                     @Override
                     public void channelInactive(ChannelHandlerContext ctx) {
+                        telemetry.upstream(telemetrySessionId, targetId, false, "Connection closed");
                         if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
                     }
 
