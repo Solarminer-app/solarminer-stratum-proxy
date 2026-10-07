@@ -1,0 +1,105 @@
+name: Release Stratum Proxy JAR
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish the JAR for (e.g. v1.0.4)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-stratum-proxy-jar-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-jar:
+    name: Build and attach executable JAR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build executable JAR and checksum
+        id: jar
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          VERSION="$(./gradlew -q printVersion)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Gradle version must use x.y.z, got: $VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            TAG_VERSION="${REF_NAME#v}"
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "Git tag and Gradle version do not match:" >&2
+              echo "  Git tag:        $TAG_VERSION" >&2
+              echo "  Gradle version: $VERSION" >&2
+              exit 1
+            fi
+          fi
+
+          ./gradlew clean check bootJar --no-daemon
+
+          JAR="build/libs/stratum-proxy-${VERSION}.jar"
+          if [[ ! -f "$JAR" ]]; then
+            echo "Expected bootJar output not found: $JAR" >&2
+            exit 1
+          fi
+
+          (
+            cd build/libs
+            sha256sum "stratum-proxy-${VERSION}.jar" > "stratum-proxy-${VERSION}.jar.sha256"
+          )
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release with JAR assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.jar.outputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          TAG="${REQUESTED_TAG:-$REF_NAME}"
+          JAR="build/libs/stratum-proxy-${VERSION}.jar"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$JAR" "$JAR.sha256" --clobber
+          else
+            gh release create "$TAG" "$JAR" "$JAR.sha256" \
+              --title "SolarMiner Stratum Proxy ${VERSION}" \
+              --target "$TARGET_SHA" \
+              --latest \
+              --generate-notes
+          fi
