@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#090d17"><title>SolarMiner · Stratum Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark">S</span><span>solar<span class="brand-light">miner</span><small>STRATUM CONTROL</small></span></a>
+    <div class="side-label">NETWORKS</div><nav id="coin-nav" aria-label="Mining coins"></nav>
+    <div class="sidebar-foot"><span class="pulse-dot"></span><span>Proxy runtime</span><strong id="runtime-state">CONNECTING</strong></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="breadcrumbs">Infrastructure <span>/</span> Stratum proxy</div><div class="top-actions"><span class="live-pill"><i></i> LIVE TELEMETRY</span><span class="updated" id="updated">Waiting for data</span></div></header>
+    <section class="page-heading"><div><div class="eyebrow">MINING NETWORK OVERVIEW</div><h1 id="coin-title">Stratum proxy</h1><p>Routing performance and pool health across your connected workers.</p></div><div class="listener-chip" id="listener-chip"><span class="status-dot"></span><span id="listener-text">Checking listener</span><b id="listener-port">—</b></div></section>
+    <section class="metric-grid" aria-label="Coin metrics">
+      <article class="metric-card primary"><div class="metric-top"><span>AVG HASHRATE</span><span class="metric-icon">↗</span></div><strong id="hashrate">—</strong><div class="metric-foot"><span class="tag">15 MIN ESTIMATE</span><span id="rate-foot">Waiting for accepted shares</span></div><div class="spark" aria-hidden="true"><svg viewBox="0 0 320 48" preserveAspectRatio="none"><path id="spark-area" d=""></path><path id="spark-line" d=""></path></svg></div></article>
+      <article class="metric-card"><div class="metric-top"><span>CONNECTED WORKERS</span><span class="metric-icon">⌘</span></div><strong id="workers">—</strong><div class="metric-foot"><span class="live-dot"></span><span id="upstreams">— upstream connections</span></div></article>
+      <article class="metric-card"><div class="metric-top"><span>SHARES · PROXY RUNTIME</span><span class="metric-icon">◈</span></div><strong id="shares">—</strong><div class="metric-foot"><span id="share-detail">Accepted · rejected</span><span class="tag">POOL RESPONSES</span></div></article>
+      <article class="metric-card"><div class="metric-top"><span>AVG SHARE DIFFICULTY · 24H</span><span class="metric-icon">⌁</span></div><strong id="difficulty">—</strong><div class="metric-foot"><span>Accepted shares</span><span class="tag">ROLLING WINDOW</span></div></article>
+      <article class="metric-card value-card"><div class="metric-top"><span>ESTIMATED GROSS VALUE</span><span class="metric-icon">$</span></div><strong id="value">—</strong><div class="metric-foot"><span id="value-detail">Based on accepted share work</span><span class="tag" id="market-state">MARKET DATA</span></div></article>
+    </section>
+    <section class="panel route-panel"><div class="panel-heading"><div><div class="eyebrow">TRAFFIC ALLOCATION</div><h2>Where hashrate is routed</h2></div><div class="panel-note"><span class="legend-dot"></span>Job routing share · last 24h</div></div><div class="route-table-wrap"><table><thead><tr><th>DESTINATION</th><th>POOL</th><th>ROUTED</th><th>AVG HASHRATE</th><th>SHARES A / R</th><th>FEE</th><th>VALUE / HOUR</th><th>STATUS</th></tr></thead><tbody id="routes"><tr><td colspan="8" class="empty">Waiting for telemetry…</td></tr></tbody></table></div><div class="mobile-routes" id="mobile-routes"></div><div class="route-foot"><span>Routing share reflects assigned jobs and can vary with low sample counts.</span><span id="route-total">—</span></div></section>
+    <section class="panel console-panel"><div class="panel-heading console-heading"><div><div class="eyebrow">LIVE EVENT STREAM</div><h2>Proxy console</h2></div><div class="console-controls"><label class="sr-only" for="level-filter">Filter events by severity</label><select id="level-filter"><option value="all">All levels</option><option value="ERROR">Errors</option><option value="WARN">Warnings</option><option value="SUCCESS">Success</option><option value="INFO">Info</option></select><button id="pause-console" type="button" aria-pressed="false">Pause stream</button></div></div><div class="console-window"><div class="console-toolbar"><span><i></i> proxy-events.log</span><span id="event-count">0 EVENTS</span></div><div id="console" class="console-lines" role="log" aria-live="polite"><div class="empty">Waiting for proxy events…</div></div></div></section>
+    <footer class="disclaimer"><span>ⓘ</span><p><strong>How to read these estimates:</strong> Hashrate is inferred from accepted share difficulty over a rolling 15-minute window. Gross value uses accepted share work and public network data from SolarMiner Currency Service; it is not a pool balance or payout. Pool-side accounting may differ.</p></footer>
+  </main>
+</div>
+<script src="app.js" defer></script>
+</body></html>

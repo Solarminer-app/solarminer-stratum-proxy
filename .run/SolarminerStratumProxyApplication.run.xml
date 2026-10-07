@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="SolarminerStratumProxyApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot" nameIsGenerated="true">
     <option name="ACTIVE_PROFILES" value="dev" />
-    <module name="solarminer-stratum-proxy.main" />
+    <module name="pv-miner.pc-agent.embeddedProxy" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="de.verdox.solarminer.solarminerstratumproxy.SolarminerStratumProxyApplication" />
     <extension name="net.ashald.envfile">
       <option name="IS_ENABLED" value="false" />

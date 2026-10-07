@@ -26,4 +26,8 @@ public interface ProxyContext {
     void reconnectToTarget(String targetId, String s);
 
     void setDynamicRouting(String targetPool, String workerName, String password);
+
+    default void recordLocalReject(String reason) { }
+    /** Lifecycle/protocol failures are not rejected shares. Never pass credentials. */
+    default void recordProtocolError(String reason) { }
 }
