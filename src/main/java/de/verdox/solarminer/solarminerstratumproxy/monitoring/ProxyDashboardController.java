@@ -32,6 +32,7 @@ public class ProxyDashboardController {
         properties.getCoins().forEach((coin, config) -> {
             var metrics = telemetry.metrics(coin, fees.getFeeTargets(coin), server.listenerStatus(coin));
             var snapshot = snapshots.get(coin.toLowerCase());
+            Double marketPrice = currency.priceUsd(coin);
             List<Target> targets = metrics.targets().stream().map(target -> {
                 double coinsPerDay = snapshot == null || snapshot.stale() ? 0
                         : snapshot.estimatedCoinsPerDay(target.acceptedWorkHashes24h()) / 24.0;
@@ -46,7 +47,8 @@ public class ProxyDashboardController {
             coins.add(new Coin(coin, config.getPort(), metrics.listenerStatus(), metrics.connectedWorkers(), metrics.upstreamConnections(),
                     metrics.submittedShares(), metrics.acceptedShares(), metrics.rejectedShares(), metrics.averageAcceptedShareDifficulty(),
                     metrics.estimatedHashrateHps(), metrics.sampledAt(), targets, snapshot == null ? null : snapshot.ticker(),
-                    snapshot == null ? null : snapshot.priceUsd(), snapshot == null ? null : snapshot.stale(),
+                    marketPrice != null ? marketPrice : snapshot == null || snapshot.stale() ? null : snapshot.priceUsd(),
+                    snapshot == null ? null : snapshot.stale(),
                     snapshot == null ? null : snapshot.updatedAt(), snapshot == null ? null : value));
         });
         return new Dashboard(coins, currency.status());

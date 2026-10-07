@@ -1,6 +1,7 @@
 package de.verdox.solarminer.solarminerstratumproxy.v1;
 
 public interface MiningProtocol {
+    default boolean isHandshakeMessage(String rawMessage) { return false; }
     default String interceptMessageFromMiner(String rawMessage, ProxyContext context) {
         return rawMessage;
     }

@@ -1,5 +1,37 @@
 # Agent work log
 
+## 2026-10-07 — QTC job notification format and real SRBMiner reconnects
+
+- Evidence: two local SRBMiner 3.7.1 QTC GPU consoles showed `PARSE error: Quantus notification has no job object` immediately before reconnection. The same sessions received initial jobs, reached about 350–385 MH/s and logged accepted shares; those miner-native counters are not pool-credit evidence. Earlier RVN/ETC local consoles showed sustained jobs and ended with an explicit Node configuration stop, not a comparable parser failure.
+- Cause and change: the QTC proxy adapter sent follow-up `job` notifications with job fields directly under `params`; SRBMiner requires the object under `params.job`. Outgoing notifications now use the nested job shape, preserve `clean_jobs`, and accept direct or nested upstream notifications. The initial login response keeps its direct `result.job` shape. No QTC fee route was bypassed.
+- Verification: focused `GpuStratumProtocolTest` and `GpuMinerSessionHandshakeTest` passed; `:pc-agent:standaloneJar --offline --no-daemon` rebuilt successfully with the embedded proxy change. The running miner was not restarted with that artifact; sustained connectivity and pool-side accepted shares remain open.
+
+## 2026-10-07 — Internal GPU route frames excluded from miner telemetry
+
+- Cause: each PC-Agent GPU relay connection writes an internal `solarminer.route` frame before SRBMiner sends any Stratum message. The proxy previously emitted `Miner connected` on that frame, so a route-only socket produced a false connected/disconnected pair even with the earlier TCP-only probe fix.
+- Change: `MinerSession` processes protocol interception before opening visible miner telemetry, then restores the routed user-pool address once an actual miner frame arrives. No Stratum payload or fee-routing contract changed.
+- Verification: `GpuMinerSessionHandshakeTest` covers route-only sockets for RVN/ETC/DCR/QTC and the real subscribe/authorize path; the full proxy `test --offline` suite passed. The PC-Agent standalone JAR was rebuilt with the updated embedded proxy source. A live operator log is still needed to distinguish route-only events from genuine SRBMiner/upstream reconnects in the reported running instance.
+
+## 2026-10-07 — Independent market quotes for BTC/DCR/QTC dashboard
+
+- `CurrencySnapshotService` still uses C9 network snapshots for gross earning estimates, but also reads the public `/coin-prices` map independently. The dashboard can show BTC/DCR/QTC USD-per-coin quotes even when the network row is absent; it labels this `PRICE ONLY` and does not invent an earnings estimate. Quotes older than two hours are withheld.
+- The public Currency Service was observed to omit DCR/QTC prices and BTC/DCR/QTC network rows at the time of inspection, so the owning `currency-service` repository was updated and must be deployed separately. This proxy change cannot fill missing central quotes itself. Full proxy Gradle suite passed locally; no running proxy was restarted or deployed.
+
+## 2026-10-07 — ETC pseudo-reconnects from readiness probes
+
+- Operator log: ETC `Miner connected`/`Miner disconnected` pairs in the same second every ~2–5 s, with only one pair of upstream connections. The PC-Agent's five-second GPU monitor opened and closed a raw TCP socket for readiness; the proxy counted that socket at accept, before any Stratum frame. This is a telemetry false positive, not proof that a real miner reconnected.
+- `MinerSession` now records a miner only after receiving its first frame, so TCP-only probes are invisible to miner telemetry. PC-Agent now reads existing `/api/dashboard` coin `listenerStatus` and configured port over HTTP instead of probing the Stratum socket. The proxy also handles optional `mining.extranonce.subscribe` locally; a bounded ETC Kryptex probe returned `Not supported` for that extension whereas 2Miners accepted it. See [GPU protocol record](gpu-stratum-repair-2026-10-06.md).
+- Verification: full proxy `sh gradlew test --offline --no-daemon` passed, 24 tests, including TCP-only probe and local extension negotiation. Sibling PC-Agent suite and `standaloneJar` passed, 75 tests. The operator's live running process was not restarted or deployed; real miner stability, accepted user/house shares and pool credits remain open.
+
+## 2026-10-06 — Repair GPU handshake, nonce routing and Quantus dialect
+
+- Owner: GPU protocol adapters and MinerSession; C2 producer updated in Solar-Miner-Node/pc-agent and shared contract updated in admin-portal. Full findings, primary references and bounded real Kryptex login/job evidence: [repair record](gpu-stratum-repair-2026-10-06.md).
+- Removed fixed subscribe/authorize ID assumptions, non-hex proxy job IDs and fabricated subscription nonces. RVN supports a target embedded in notify; ETC supports default difficulty 1. Extranonce updates are negotiated and retain their byte-length parameter. Failed subscriptions/authorizations and required fee failures stop with a sanitized reason rather than becoming silent fee bypass.
+- Quantus now has a separate login/job/named-submit adapter; it preserves complete QTC job fields and routes each submit with its original pool job ID/session token. Live login/embedded job was observed, but submits and credits are still fixture-only/unverified.
+- PC-Agent supplies the selected route before the miner handshake through a loopback relay. MinerSession consumes the preamble, replays late fee handshakes and configured-route reconnects, and guards closed/replaced connections. Standalone RVN/ETC ports are 3336/3337. Agent and external proxy must upgrade together; no deployment/restart occurred.
+- Verification: JDK `/home/lukas/.jdks/graalvm-ce-21.0.2`; `sh gradlew test --offline --no-daemon` succeeded with **23 tests**, including real loopback Netty subscribe-first/fee-authorize coverage. `sh gradlew :pc-agent:test :pc-agent:standaloneJar --offline --no-daemon` in the Node repository succeeded; PC-Agent suite has **74 passing tests**. `git diff --check` passed in all three affected repositories. Context tests use ephemeral loopback ports rather than interfering with running proxy listeners.
+- Open gates: actual SRBMiner submit/accepted user-house-referral shares, nonce changes with a real miner, start/stop on claimed hardware/OS, pool credits and payouts. Fee policy, fee service data and production routing flags were not changed.
+
 ## 2026-10-06 — Decred Haste adapter, fee route remains disabled
 
 - Owner: GPU Stratum adapter. Added a Decred protocol bean and local listener on 3338. The provisional `mining.subscribe` reply follows the published Haste shape (difficulty/notify subscription IDs, 12-byte extranonce2 field); the upstream extranonce and length are passed to the miner after the selected pool replies.

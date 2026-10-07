@@ -20,7 +20,7 @@ Checked against `src/main/java` on 2026-10-01. Read [workspace contracts](../../
 
 ## Extension and review queue
 
-- The protocol factory already separates BTC, XMR, Pearl and experimental GPU Stratum adapters. QTC uses the GPU JSON-RPC adapter at `3339`; live Kryptex message compatibility and house/referral accounting remain unverified. Preserve that boundary; avoid protocol conditionals in Netty connection handlers.
+- The protocol factory separates BTC, XMR, Pearl and experimental GPU adapters. QTC uses its own `login`/`job`/named-submit adapter at `3339`, based on an observed Kryptex login response, not EthereumStratum. See [GPU Stratum repair](gpu-stratum-repair-2026-10-06.md) for evidence, the new PC-Agent route preamble and remaining live-share/accounting gates. Avoid coin protocol conditionals in Netty handlers.
 - `FeeService` and the fee-backend models mirror a cross-repository payload. Check unknown coin, missing `house`, empty/unavailable fee response and referral route behavior together.
 - The local REST/discovery endpoints and internet-reachable fee backend have different trust boundaries. Treat changes to admin routing with that distinction in mind.
 

@@ -9,9 +9,6 @@ import de.verdox.solarminer.solarminerstratumproxy.v1.ProxyContext;
 import de.verdox.solarminer.solarminerstratumproxy.v1.fee.FeeManager;
 import de.verdox.solarminer.solarminerstratumproxy.v1.routing.JobOrigin;
 
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,7 +33,14 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     private final Map<String, String> currentTarget = new HashMap<>();
     private final Map<String, String> extranonces = new HashMap<>();
     private final Set<String> authorized = new HashSet<>();
-    private boolean provisionalSubscribeSent;
+    private final Map<String, String> requests = boundedMap();
+    private final Map<String, ArrayNode> nonceParams = new HashMap<>();
+    private boolean routePrepared;
+    private boolean extranonceSubscribed;
+    private ArrayNode minerNonceParameters;
+    private boolean minerJsonRpc2;
+    private final Set<String> restarting = new HashSet<>();
+    private final Map<String, Integer> reconnects = new HashMap<>();
 
     private record PendingSubmit(JsonNode minerId) { }
 
@@ -50,38 +54,53 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     abstract boolean validWallet(String wallet);
     abstract String targetMethod();
 
-    /** Reply shape sent before dynamic pool routing is known; coin dialects may override it. */
-    protected ArrayNode provisionalSubscription() {
-        ArrayNode result = mapper.createArrayNode();
-        if ("ravencoin".equals(coin())) result.addNull();
-        else result.addArray().add("mining.notify").add("solarminer").add("EthereumStratum/1.0.0");
-        return result.add("00");
+    @Override
+    public boolean isHandshakeMessage(String raw) {
+        ObjectNode message = parse(raw);
+        return message != null && Set.of("mining.subscribe", "mining.authorize",
+                "mining.configure").contains(method(message));
     }
 
     @Override
     public String interceptMessageFromMiner(String raw, ProxyContext context) {
         ObjectNode message = parse(raw);
-        if (message == null || !"mining.authorize".equals(method(message))) return raw;
+        if (message == null) return raw;
+        if ("2.0".equals(message.path("jsonrpc").asText())) minerJsonRpc2 = true;
+        if (message.hasNonNull("id")) requests.put(message.path("id").toString(), method(message));
+        if ("mining.extranonce.subscribe".equals(method(message))) {
+            // The proxy owns nonce changes across fee pools. Some upstreams reject
+            // this optional extension or close the socket when asked about it.
+            extranonceSubscribed = true;
+            if (message.hasNonNull("id")) {
+                ObjectNode response = mapper.createObjectNode();
+                if (message.has("jsonrpc")) response.set("jsonrpc", message.path("jsonrpc"));
+                response.set("id", message.path("id").deepCopy());
+                response.put("result", true);
+                response.putNull("error");
+                context.sendToMiner(response.toString());
+            }
+            return null;
+        }
+        boolean route = "solarminer.route".equals(method(message));
+        if (!route && !"mining.authorize".equals(method(message))) return raw;
         JsonNode params = message.path("params");
-        if (!params.isArray() || params.size() < 2 || !params.get(0).isTextual()) return raw;
-        String user = params.get(0).asText();
-        int marker = user.indexOf(".sm1.");
-        if (marker < 0) return raw;
-        String wallet = user.substring(0, marker);
-        String[] encoded = user.substring(marker + 5).split("\\.", 2);
-        if (!validWallet(wallet) || encoded.length != 2 || !encoded[0].matches("[A-Za-z0-9_-]{1,256}")
-                || !encoded[1].matches("[A-Za-z0-9_-]{1,32}")) {
-            context.disconnect();
+        if (!params.isArray() || params.size() < 2 || !params.get(0).isTextual()) {
+            if (route) { context.recordProtocolError("Invalid route preamble"); context.disconnect(); return null; }
             return raw;
         }
-        String pool;
-        try { pool = new String(Base64.getUrlDecoder().decode(encoded[0]), StandardCharsets.UTF_8); }
-        catch (IllegalArgumentException e) { context.disconnect(); return raw; }
-        if (!validPool(pool)) { context.disconnect(); return raw; }
-        URI poolUri = URI.create(pool.contains("://") ? pool : "stratum+tcp://" + pool);
-        String separator = poolUri.getHost().endsWith(".kryptex.network") ? "/" : ".";
-        String worker = wallet + separator + encoded[1];
-        context.setDynamicRouting(pool, worker, params.get(1).asText());
+        String user = params.get(0).asText();
+        int marker = user.indexOf(".sm1.");
+        if (marker < 0) {
+            if (route) { context.recordProtocolError("Invalid route preamble"); context.disconnect(); return null; }
+            return raw;
+        }
+        String worker;
+        try { worker = GpuRouteEnvelope.apply(user, params.get(1).asText(), this::validWallet, context); }
+        catch (IllegalArgumentException invalid) {
+            context.recordProtocolError("Invalid GPU route envelope"); context.disconnect(); return null;
+        }
+        routePrepared = true;
+        if (route) return null; // Internal envelope is never sent to a mining pool.
         ((ArrayNode) params).set(0, mapper.valueToTree(worker));
         return message.toString();
     }
@@ -91,23 +110,17 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         ObjectNode message = parse(raw);
         if (message == null) { context.disconnect(); return; }
         String method = method(message);
+        if (message.hasNonNull("id")) requests.put(message.path("id").toString(), method);
         if (!context.isConnectedToUpstream()) {
-            if ("mining.subscribe".equals(method) && !provisionalSubscribeSent && message.hasNonNull("id")) {
-                // SRBMiner waits for this reply before it sends authorize, which carries
-                // the dynamic pool route. Replace the provisional nonce once the real
-                // upstream subscription is available.
-                ObjectNode response = mapper.createObjectNode();
-                response.set("id", message.path("id").deepCopy());
-                response.putNull("error");
-                response.set("result", provisionalSubscription());
-                provisionalSubscribeSent = true;
-                context.sendToMiner(response.toString());
+            if (routePrepared) context.connectToTargetPool(coin());
+            else if ("mining.subscribe".equals(method)) {
+                reject(message, context, "GPU route preamble required; update PC-Agent and proxy together");
+                context.disconnect();
             }
-            if ("mining.authorize".equals(method)) context.connectToTargetPool(coin());
             return;
         }
         if (!"mining.submit".equals(method)) {
-            context.sendToUpstream(FeeManager.USER_TARGET_ID, raw);
+            context.broadcastToUpstreams(raw);
             return;
         }
         JsonNode params = message.path("params");
@@ -128,7 +141,8 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         }
         ((ArrayNode) params).set(0, mapper.valueToTree(worker));
         ((ArrayNode) params).set(1, mapper.valueToTree(origin.originalJobId()));
-        long upstreamId = requestSequence.incrementAndGet();
+        long upstreamId;
+        do { upstreamId = requestSequence.incrementAndGet(); } while (requests.containsKey(Long.toString(upstreamId)));
         pending.put(origin.targetId() + ":" + upstreamId, new PendingSubmit(message.path("id").deepCopy()));
         message.put("id", upstreamId);
         context.sendToUpstream(origin.targetId(), message.toString());
@@ -140,17 +154,36 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         if (message == null) return;
         String method = method(message);
         if ("client.reconnect".equals(method)) {
-            // A pool must not redirect the miner around the SolarMiner proxy.
-            // Reopen the whole session; MinerSession's single-upstream reconnect
-            // path does not replay this dialect's subscribe/authorize handshake.
-            context.disconnect();
+            // Ignore redirect destinations; only reopen the configured route.
+            if (reconnects.merge(targetId, 1, Integer::sum) > 3) {
+                context.recordProtocolError("Upstream reconnect limit exceeded for " + targetId);
+                context.disconnect();
+                return;
+            }
+            restarting.add(targetId);
+            authorized.remove(targetId);
+            currentTarget.remove(targetId);
+            extranonces.remove(targetId);
+            nonceParams.remove(targetId);
+            latestJobs.remove(targetId);
+            synchronized (jobs) { jobs.entrySet().removeIf(entry -> entry.getValue().targetId().equals(targetId)); }
+            context.reconnectToTarget(targetId, null);
             return;
         }
         if ("mining.notify".equals(method)) {
             JsonNode params = message.path("params");
             if (!params.isArray() || params.isEmpty() || !params.get(0).isTextual()) return;
             String original = params.get(0).asText();
-            String proxyId = "sm-gpu-" + jobSequence.incrementAndGet();
+            // Some raw KAWPOW pools carry the complete target only in notify.
+            if ("ravencoin".equals(coin()) && params.size() > 3 && params.get(3).isTextual()
+                    && params.get(3).asText().matches("(?:0x)?[A-Fa-f0-9]{64}")) {
+                ObjectNode target = mapper.createObjectNode().put("method", "mining.set_target");
+                target.putNull("id");
+                target.putArray("params").add(params.get(3).asText());
+                if (minerJsonRpc2) target.put("jsonrpc", "2.0");
+                currentTarget.put(targetId, target.toString());
+            }
+            String proxyId = Long.toHexString(jobSequence.incrementAndGet());
             jobs.put(proxyId, new JobOrigin(targetId, original));
             ((ArrayNode) params).set(0, mapper.valueToTree(proxyId));
             latestJobs.put(targetId, message.toString());
@@ -167,9 +200,20 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         }
         if (targetMethod().equals(method) || "mining.set_extranonce".equals(method)) {
             if (targetMethod().equals(method)) currentTarget.put(targetId, raw);
-            else if (message.path("params").isArray() && !message.path("params").isEmpty())
+            else if (message.path("params").isArray() && !message.path("params").isEmpty()) {
                 extranonces.put(targetId, message.path("params").get(0).asText());
-            if (targetId.equals(context.getCurrentTargetId())) context.sendToMiner(raw);
+                nonceParams.put(targetId, ((ArrayNode) message.path("params")).deepCopy());
+            }
+            if (targetId.equals(context.getCurrentTargetId())) {
+                if ("mining.set_extranonce".equals(method) && !extranonceSubscribed) {
+                    if (nonceParams.get(targetId).equals(minerNonceParameters)) return;
+                    context.recordProtocolError("Pool changed extranonce without miner capability");
+                    context.disconnect();
+                    return;
+                }
+                if ("mining.set_extranonce".equals(method)) minerNonceParameters = nonceParams.get(targetId);
+                context.sendToMiner(raw);
+            }
             return;
         }
         JsonNode id = message.path("id");
@@ -180,37 +224,52 @@ abstract class GpuStratumProtocol implements MiningProtocol {
                 context.sendToMiner(message.toString());
                 return;
             }
-            if (id.isIntegralNumber() && id.asLong() == 1 && message.path("result").isArray()) {
+            String requestMethod = requests.get(id.toString());
+            if ("mining.extranonce.subscribe".equals(requestMethod)) return;
+            if ("mining.subscribe".equals(requestMethod)) {
                 JsonNode result = message.path("result");
                 JsonNode nonce = "ravencoin".equals(coin())
                         ? (result.path(0).isTextual() ? result.path(0) : result.path(1))
                         : result.path(1);
+                if (!result.isArray() || !nonce.isTextual() || message.hasNonNull("error")) {
+                    context.recordProtocolError("Upstream subscription failed for " + targetId);
+                    if (FeeManager.USER_TARGET_ID.equals(targetId)) context.sendToMiner(raw);
+                    context.disconnect();
+                    return;
+                }
                 if (nonce.isTextual()) {
                     extranonces.put(targetId, nonce.asText());
-                    if (provisionalSubscribeSent && targetId.equals(context.getCurrentTargetId())) {
-                        ObjectNode update = mapper.createObjectNode();
-                        update.putNull("id");
-                        update.put("method", "mining.set_extranonce");
-                        ArrayNode updateParams = update.putArray("params").add(nonce.asText());
-                        if (result.size() > 2 && result.path(2).canConvertToInt()) updateParams.add(result.path(2).asInt());
-                        context.sendToMiner(update.toString());
-                    }
+                    ArrayNode params = mapper.createArrayNode().add(nonce.asText());
+                    if (result.size() > 2 && result.path(2).canConvertToInt()) params.add(result.path(2).asInt());
+                    nonceParams.put(targetId, params);
+                    if (FeeManager.USER_TARGET_ID.equals(targetId) && !restarting.contains(targetId)) minerNonceParameters = params.deepCopy();
                 }
             }
-            if (id.isIntegralNumber() && id.asLong() == 2) {
-                if (message.path("result").asBoolean(false) && message.path("error").isNull()) authorized.add(targetId);
+            if ("mining.authorize".equals(requestMethod)) {
+                if (message.path("result").asBoolean(false) && (message.path("error").isNull() || !message.has("error"))) authorized.add(targetId);
                 else {
                     authorized.remove(targetId);
+                    context.recordProtocolError("Upstream authorization failed for " + targetId);
                     context.disconnect();
                     return;
                 }
             }
             // A reply carrying one of our rewritten submit IDs is meaningful only
             // when the matching origin target owns the pending request.
-            if (id.isIntegralNumber() && id.asLong() > 1_000_000) return;
-            if (FeeManager.USER_TARGET_ID.equals(targetId)
-                    && !(provisionalSubscribeSent && id.isIntegralNumber() && id.asLong() == 1))
+            if (id.isIntegralNumber() && id.asLong() > 1_000_000 && requestMethod == null) return;
+            if (restarting.contains(targetId)) {
+                if ("mining.authorize".equals(requestMethod) && authorized.contains(targetId)) {
+                    restarting.remove(targetId);
+                    if (targetId.equals(context.getCurrentTargetId())) onTargetChanged(targetId, context);
+                }
+                return;
+            }
+            if (FeeManager.USER_TARGET_ID.equals(targetId))
                 context.sendToMiner(raw);
+            if ("mining.authorize".equals(requestMethod) && targetId.equals(context.getCurrentTargetId()) && ready(targetId)) {
+                String job = latestJobs.get(targetId);
+                if (job != null) context.sendToMiner(job);
+            }
             return;
         }
         if (targetId.equals(context.getCurrentTargetId())) context.sendToMiner(raw);
@@ -221,13 +280,27 @@ abstract class GpuStratumProtocol implements MiningProtocol {
         if (!ready(targetId)) return;
         String target = currentTarget.get(targetId);
         if (target != null) context.sendToMiner(target);
+        else if ("ethereumclassic".equals(coin())) {
+            ObjectNode difficulty = mapper.createObjectNode().put("method", "mining.set_difficulty");
+            difficulty.putNull("id");
+            difficulty.putArray("params").add(1);
+            if (minerJsonRpc2) difficulty.put("jsonrpc", "2.0");
+            context.sendToMiner(difficulty.toString());
+        }
         String nonce = extranonces.get(targetId);
-        if (nonce != null) {
+        if (nonce != null && !nonceParams.get(targetId).equals(minerNonceParameters)) {
+            if (!extranonceSubscribed) {
+                context.recordProtocolError("Fee switch requires mining.extranonce.subscribe");
+                context.disconnect();
+                return;
+            }
             ObjectNode message = mapper.createObjectNode();
             message.putNull("id");
             message.put("method", "mining.set_extranonce");
-            message.putArray("params").add(nonce);
+            if (minerJsonRpc2) message.put("jsonrpc", "2.0");
+            message.set("params", nonceParams.get(targetId));
             context.sendToMiner(message.toString());
+            minerNonceParameters = nonceParams.get(targetId).deepCopy();
         }
         String job = latestJobs.get(targetId);
         if (job != null) context.sendToMiner(job);
@@ -247,23 +320,14 @@ abstract class GpuStratumProtocol implements MiningProtocol {
     }
 
     private boolean ready(String targetId) {
-        return authorized.contains(targetId) && currentTarget.containsKey(targetId) && extranonces.containsKey(targetId);
-    }
-
-    private boolean validPool(String raw) {
-        try {
-            URI uri = URI.create(raw.contains("://") ? raw : "stratum+tcp://" + raw);
-            return ("stratum+tcp".equals(uri.getScheme()) || "stratum+ssl".equals(uri.getScheme()))
-                    && uri.getHost() != null && uri.getHost().matches("[A-Za-z0-9.-]+")
-                    && uri.getPort() > 0 && uri.getPort() <= 65535
-                    && (uri.getRawPath() == null || uri.getRawPath().isEmpty())
-                    && uri.getRawUserInfo() == null && uri.getRawQuery() == null && uri.getRawFragment() == null;
-        } catch (IllegalArgumentException e) { return false; }
+        return authorized.contains(targetId) && extranonces.containsKey(targetId)
+                && (currentTarget.containsKey(targetId) || "ethereumclassic".equals(coin()));
     }
 
     private void reject(ObjectNode request, ProxyContext context, String reason) {
         context.recordLocalReject(reason);
         ObjectNode response = mapper.createObjectNode();
+        if (request.has("jsonrpc")) response.set("jsonrpc", request.path("jsonrpc"));
         response.set("id", request.path("id").deepCopy());
         response.put("result", false);
         response.putArray("error").add(21).add(reason).addNull();

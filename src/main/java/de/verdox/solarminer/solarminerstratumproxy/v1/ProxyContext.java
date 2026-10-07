@@ -28,4 +28,6 @@ public interface ProxyContext {
     void setDynamicRouting(String targetPool, String workerName, String password);
 
     default void recordLocalReject(String reason) { }
+    /** Lifecycle/protocol failures are not rejected shares. Never pass credentials. */
+    default void recordProtocolError(String reason) { }
 }

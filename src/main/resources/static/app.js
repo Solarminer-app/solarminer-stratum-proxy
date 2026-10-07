@@ -59,7 +59,9 @@
     $('difficulty').textContent = number(coin.averageAcceptedShareDifficulty,2);
     $('value').textContent = coin.estimatedUsdPerHour == null ? '—' : `$${number(coin.estimatedUsdPerHour,4)}`;
     const stale = coin.currencyDataStale == null || coin.currencyDataStale;
-    $('market-state').textContent = stale ? 'DATA UNAVAILABLE / STALE' : `LIVE ${coin.ticker || ticker(coin.coin)} · $${number(coin.priceUsd,5)}`;
+    $('market-state').textContent = coin.priceUsd > 0
+      ? `${stale ? 'PRICE ONLY' : 'QUOTE'} ${coin.ticker || ticker(coin.coin)} · $${number(coin.priceUsd,5)}`
+      : 'PRICE UNAVAILABLE';
     $('value-detail').textContent = coin.estimatedUsdPerHour == null ? 'Currency snapshot unavailable or stale' : `${coin.ticker || ticker(coin.coin)} gross value · public snapshot`;
     $('updated').textContent = `Updated ${new Date(coin.sampledAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
     $('runtime-state').textContent = state.coins.some(item=>item.listenerStatus==='online') ? 'OPERATIONAL' : 'CHECK LISTENERS';

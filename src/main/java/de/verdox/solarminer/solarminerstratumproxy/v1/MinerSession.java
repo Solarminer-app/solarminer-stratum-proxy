@@ -47,6 +47,9 @@ public class MinerSession implements ProxyContext {
     private String coinName;
     private final ConcurrentHashMap<String, Channel> upstreamChannels = new ConcurrentHashMap<>();
     private final List<String> messageBuffer = new ArrayList<>();
+    private final List<String> handshakeMessages = new ArrayList<>();
+    private boolean connecting;
+    private boolean closed;
 
     private boolean isConnectedToUpstream = false;
     private String currentTargetId = FeeManager.USER_TARGET_ID;
@@ -73,21 +76,38 @@ public class MinerSession implements ProxyContext {
             this.minerIp = "unknown";
         }
 
-        log.info("New miner connection from: {}", this.minerIp+" ["+coinName+"]");
-        this.telemetrySessionId = telemetry.connected(coinName, minerIp);
+        // A TCP connect without a Stratum frame is a reachability probe, not a miner.
     }
 
     public void handleMessageFromMiner(String rawJson) {
-        if (feeRequired && !feeTargetsReady()) { disconnect(); return; }
+        if (closed) return;
+        // The GPU relay sends an internal route frame before the miner sends any
+        // Stratum traffic. It must not create a visible miner session by itself.
         rawJson = miningProtocol.interceptMessageFromMiner(rawJson, this);
-        if (!isConnectedToUpstream && messageBuffer.size() < 16 && rawJson.length() <= 16384)
+        if (rawJson == null || closed) return;
+        if (telemetrySessionId == null) {
+            telemetrySessionId = telemetry.connected(coinName, minerIp);
+            if (dynamicPool != null) telemetry.userPool(telemetrySessionId, dynamicPool);
+            log.info("New miner connection from: {} [{}]", minerIp, coinName);
+        }
+        if (feeRequired && !feeTargetsReady()) { recordProtocolError("Required fee route unavailable"); disconnect(); return; }
+        if (miningProtocol.isHandshakeMessage(rawJson)) {
+            if (handshakeMessages.size() >= 16) { recordProtocolError("Handshake limit exceeded"); disconnect(); return; }
+            handshakeMessages.add(rawJson);
+        }
+        if (!isConnectedToUpstream) {
+            if (messageBuffer.size() >= 16 || rawJson.length() > 16384) {
+                recordProtocolError("Initial message buffer limit exceeded"); disconnect(); return;
+            }
             messageBuffer.add(rawJson);
+        }
         log.debug("Miner -> Proxy: {} characters", rawJson.length());
         miningProtocol.handleMessageFromMiner(rawJson, this);
     }
 
     public void handleMessageFromPool(String rawJson, String targetId) {
-        if (feeRequired && !feeTargetsReady()) { disconnect(); return; }
+        if (closed) return;
+        if (feeRequired && !feeTargetsReady()) { recordProtocolError("Required fee route unavailable"); disconnect(); return; }
         telemetry.poolMessage(telemetrySessionId, targetId, rawJson);
         telemetry.upstreamResponse(telemetrySessionId, targetId, rawJson);
         log.debug("Pool [{}] -> Proxy: {} characters", targetId, rawJson.length());
@@ -102,6 +122,12 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public void setDynamicRouting(String pool, String worker, String pass) {
+        if (dynamicPool != null && (!java.util.Objects.equals(dynamicPool, pool)
+                || !java.util.Objects.equals(dynamicWorker, worker) || !java.util.Objects.equals(dynamicPass, pass))) {
+            recordProtocolError("Route cannot change inside an established miner session");
+            disconnect();
+            return;
+        }
         this.dynamicPool = pool;
         this.dynamicWorker = worker;
         this.dynamicPass = pass;
@@ -110,6 +136,11 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public void recordLocalReject(String reason) { telemetry.localReject(telemetrySessionId, reason); }
+
+    @Override public void recordProtocolError(String reason) {
+        log.warn("Stratum failure [{}]: {}", coinName, reason);
+        telemetry.event("ERROR", coinName, reason);
+    }
 
     @Override
     public void sendToUpstream(String targetId, String message) {
@@ -123,28 +154,35 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public void reconnectToTarget(String targetId, String newAddress) {
+        if (closed) return;
+        if (newAddress == null) {
+            FeeTarget target = feeManager.getTarget(coinName, targetId);
+            newAddress = FeeManager.USER_TARGET_ID.equals(targetId) ? dynamicPool : target == null ? null : target.poolAddress();
+        }
+        if (newAddress == null) { recordProtocolError("Reconnect route unavailable for " + targetId); disconnect(); return; }
         Channel oldChannel = upstreamChannels.remove(targetId);
         if (oldChannel != null) {
             oldChannel.close();
         }
 
         connectToUpstream(targetId, newAddress, minerChannel.eventLoop(), () -> {
-            log.info("Reconnect erfolgreich für Target {} auf {}", targetId, newAddress);
+            log.info("Replaying handshake after reconnect for target {}", targetId);
+            flushBufferForTarget(targetId, List.copyOf(handshakeMessages));
         });
     }
 
     @Override
     public void broadcastToUpstreams(String message) {
         log.debug("Proxy -> Pool: {} characters", message.length());
-        for (Channel channel : upstreamChannels.values()) {
-            if (channel.isActive()) {
-                channel.writeAndFlush(message + "\n");
-            }
+        for (String targetId : upstreamChannels.keySet()) {
+            String translated = miningProtocol.translateMessageForUpstream(message, targetId, this);
+            sendToUpstream(targetId, translated == null ? message : translated);
         }
     }
 
     @Override
     public void connectToTargetPool(String workerName) {
+        if (closed || connecting || isConnectedToUpstream) return;
         if (this.dynamicPool == null) {
             log.error("Connection refused: Miner IP {} did not define a target pool in the workername (Format: pool;user;pass)", this.minerIp);
             disconnect();
@@ -157,6 +195,7 @@ public class MinerSession implements ProxyContext {
         }
 
         log.info("Routing {} to {}", workerName, this.dynamicPool);
+        connecting = true;
 
         connectToUpstream(FeeManager.USER_TARGET_ID, this.dynamicPool, minerChannel.eventLoop(), () -> {
             log.info("Main pool connection established for USER. Activating real-time routing.");
@@ -168,7 +207,7 @@ public class MinerSession implements ProxyContext {
             for (FeeTarget target : feeManager.getFeeTargets(coinName)) {
                 connectToUpstream(target.targetId(), target.poolAddress(), minerChannel.eventLoop(), () -> {
                     log.info("Dev Fee pool connection established for target: {}", target.targetId());
-                    flushBufferForTarget(target.targetId(), initialMessages);
+                    flushBufferForTarget(target.targetId(), handshakeMessages.isEmpty() ? initialMessages : List.copyOf(handshakeMessages));
                 });
             }
         });
@@ -182,7 +221,12 @@ public class MinerSession implements ProxyContext {
 
     @Override
     public void disconnect() {
-        telemetry.disconnected(telemetrySessionId);
+        if (closed) return;
+        closed = true;
+        isConnectedToUpstream = false;
+        messageBuffer.clear();
+        handshakeMessages.clear();
+        if (telemetrySessionId != null) telemetry.disconnected(telemetrySessionId);
         if (minerChannel != null && minerChannel.isActive()) minerChannel.close();
         upstreamChannels.values().forEach(Channel::close);
         upstreamChannels.clear();
@@ -235,6 +279,8 @@ public class MinerSession implements ProxyContext {
             upstream = URI.create(address.contains("://") ? address : "stratum+tcp://" + address);
         } catch (IllegalArgumentException e) {
             log.error("Invalid upstream URL for target {}", targetId);
+            recordProtocolError("Invalid upstream URL for " + targetId);
+            if (FeeManager.USER_TARGET_ID.equals(targetId) || feeRequired) disconnect();
             return;
         }
         String scheme = upstream.getScheme();
@@ -242,6 +288,8 @@ public class MinerSession implements ProxyContext {
         int port = upstream.getPort();
         if ((!"stratum+tcp".equals(scheme) && !"stratum+ssl".equals(scheme)) || host == null || port < 1 || port > 65535) {
             log.error("Unsupported upstream URL for target {}", targetId);
+            recordProtocolError("Unsupported upstream URL for " + targetId);
+            if (FeeManager.USER_TARGET_ID.equals(targetId) || feeRequired) disconnect();
             return;
         }
         boolean tls = "stratum+ssl".equals(scheme);
@@ -258,10 +306,12 @@ public class MinerSession implements ProxyContext {
             ChannelFuture future = bootstrap.connect(host, port);
             future.addListener((ChannelFutureListener) f -> {
                 if (f.isSuccess()) {
+                    if (closed) { f.channel().close(); return; }
                     if (tls) {
                         SslHandler sslHandler = f.channel().pipeline().get(SslHandler.class);
                         sslHandler.handshakeFuture().addListener(handshake -> {
                             if (handshake.isSuccess()) {
+                                if (closed) { f.channel().close(); return; }
                                 upstreamChannels.put(targetId, f.channel());
                                 telemetry.upstream(telemetrySessionId, targetId, true, safeAddress(host, port));
                                 if (onSuccess != null) onSuccess.run();
@@ -269,7 +319,7 @@ public class MinerSession implements ProxyContext {
                                 log.error("TLS handshake failed for target {}", targetId);
                                 telemetry.upstream(telemetrySessionId, targetId, false, "TLS handshake failed");
                                 f.channel().close();
-                                if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
+                                if (targetId.equals(FeeManager.USER_TARGET_ID) || feeRequired) disconnect();
                             }
                         });
                     } else {
@@ -281,7 +331,7 @@ public class MinerSession implements ProxyContext {
                 } else {
                     log.error("Connection to {} ({}) did not work!", targetId, safeAddress(host, port));
                     telemetry.upstream(telemetrySessionId, targetId, false, "Connection failed · " + safeAddress(host, port));
-                    if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
+                    if (targetId.equals(FeeManager.USER_TARGET_ID) || feeRequired) disconnect();
                 }
             });
     }
@@ -304,12 +354,16 @@ public class MinerSession implements ProxyContext {
 
                     @Override
                     public void channelInactive(ChannelHandlerContext ctx) {
+                        if (upstreamChannels.get(targetId) != ctx.channel()) return;
+                        upstreamChannels.remove(targetId, ctx.channel());
                         telemetry.upstream(telemetrySessionId, targetId, false, "Connection closed");
-                        if (targetId.equals(FeeManager.USER_TARGET_ID)) disconnect();
+                        if (!closed) recordProtocolError("Upstream connection closed for " + targetId);
+                        if (targetId.equals(FeeManager.USER_TARGET_ID) || feeRequired) disconnect();
                     }
 
                     @Override
                     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                        log.warn("Upstream transport failure for {} [{}]: {}", coinName, targetId, cause.getClass().getSimpleName());
                         ctx.close();
                     }
                 });
