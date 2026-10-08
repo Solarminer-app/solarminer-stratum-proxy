@@ -23,8 +23,9 @@ public class FeeController {
 
     @GetMapping("/{coin}/targets")
     public List<FeeTarget> getCoinTargets(@PathVariable String coin,
-                                          @RequestParam(name = "referral", required = false) String referral) {
-        return feeService.targetsFor(coin, referral);
+                                          @RequestParam(name = "referral", required = false) String referral,
+                                          @RequestParam(name = "tier", required = false) String tier) {
+        return feeService.targetsFor(coin, referral, tier);
     }
 
     /**
@@ -37,6 +38,21 @@ public class FeeController {
         feeService.setReferral(request == null ? null : request.referral());
     }
 
+    /**
+     * Set the fee tier this proxy resolves for job routing (stratum-routed
+     * miners), at runtime. {@code proxy} = reduced house share (PC-Agent without
+     * a SolarMiner Node); anything else = full node fee. The PC-Agent pushes the
+     * effective tier whenever Node control is switched on or off, and a Node
+     * forces {@code node} whenever it starts steering or reading the proxy.
+     */
+    @PostMapping("/tier")
+    public void setTier(@RequestBody(required = false) TierRequest request) {
+        feeService.setTier(request == null ? null : request.tier());
+    }
+
     public record ReferralRequest(String referral) {
+    }
+
+    public record TierRequest(String tier) {
     }
 }

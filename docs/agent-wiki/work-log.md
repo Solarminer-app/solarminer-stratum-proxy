@@ -130,3 +130,19 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
 - Mode is selected by `proxy.fee.roll-mode` (default `random`, documented in `application.properties`) and switchable at runtime via `setRollMode`. Credits survive fee-backend target refreshes (`reconcileRollState` keeps counters for still-present targets, new targets start at zero, removed targets are dropped).
 - Verification: `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test` → BUILD SUCCESSFUL, 32 tests, including the new `FeeManagerRollModeTest` (exact 7.5/2.5/90 split over 10 000 rolls, refresh does not reset the schedule, removed targets dropped, unknown mode normalises to random).
 - Not verified: no live pool session; the per-session `rollNextJobTarget` call sites (BTC/XMR protocols) were not exercised end-to-end. PC-Agent side is documented in the Solar-Miner-Node work log.
+
+## 2026-10-08 — Fee tier plumbing (node/proxy)
+
+- `FeeService` (proxy) holds a volatile `tier` (`solarminer.fee.tier`, default
+  `node`), appends `&tier=` to both fee-backend fetch paths, and exposes
+  `setTier()` which re-fetches immediately and clears the on-demand referral
+  cache — the next rolled job already uses the new split. `FeeController`
+  gained `POST /api/v1/fees/tier` (forcing surface for the PC-Agent/Node) and a
+  `tier` query param on `GET /api/v1/fees/{coin}/targets` so readers see the
+  same split the proxy enforces.
+- Compatibility: without any tier signal the proxy behaves exactly as before
+  (node tier, 2.5%); against an old fee-backend the extra query param is
+  ignored. `FeeManager` needs no change — `updateTargets`/`reconcileRollState`
+  already handle percentage changes without resetting stateful roll credits.
+- Evidence: `sh gradlew test` green (JDK 21), including the existing
+  FeeManager/FeeResponse suites. No live fee-backend probe performed.

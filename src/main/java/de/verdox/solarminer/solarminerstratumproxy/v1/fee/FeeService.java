@@ -52,9 +52,20 @@ public class FeeService {
      * {@code solarminer} anyway).
      */
     private volatile String configuredReferral;
+    /**
+     * The fee tier this proxy resolves from fee-backend: {@code node} (default,
+     * full dev fee incl. energy routing) or {@code proxy} (reduced house share
+     * for proxy-only PC-Agent setups). Initialized from
+     * {@code solarminer.fee.tier} (env: SOLARMINER_FEE_TIER); the PC-Agent and a
+     * controlling SolarMiner Node push the effective tier at runtime via
+     * {@link #setTier(String)} — every flip re-fetches immediately so the next
+     * rolled job uses the new split.
+     */
+    private volatile String tier;
     public FeeService(FeeManager feeManager,
                       ProxyProperties proxyProperties,
                       @Value("${solarminer.fee.referral:solarminer}") String configuredReferral,
+                      @Value("${solarminer.fee.tier:node}") String tier,
                       @Value("${solarminer.fee.backend-url:" + DEFAULT_BACKEND_URL + "}") String backendUrl) {
         this.feeManager = feeManager;
         this.proxyProperties = proxyProperties;
@@ -62,6 +73,7 @@ public class FeeService {
         this.objectMapper = new ObjectMapper();
         this.configuredReferral = (configuredReferral == null || configuredReferral.isBlank())
                 ? "solarminer" : configuredReferral.trim();
+        this.tier = "proxy".equalsIgnoreCase(tier) ? "proxy" : "node";
 
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -81,7 +93,8 @@ public class FeeService {
 
     public void fetchAndUpdateFees(String coin, String referral) {
         try {
-            String url = String.format("%s?coin=%s&referral=%s", backendUrl, coin, referral != null ? referral : "");
+            String url = String.format("%s?coin=%s&referral=%s&tier=%s",
+                    backendUrl, coin, referral != null ? referral : "", tier);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(10))
@@ -122,6 +135,30 @@ public class FeeService {
     }
 
     /**
+     * Change the fee tier this proxy resolves for job routing, at runtime.
+     * {@code proxy} requests the reduced house share (proxy-only, no Node energy
+     * routing); anything else resolves to the full {@code node} fee. Every actual
+     * flip re-fetches immediately, so the very next rolled job uses the new split
+     * — this is the forcing mechanism: a Node that starts steering or reading the
+     * agent/proxy pushes {@code node} and the higher fee applies instantly, and
+     * the PC-Agent reverts to {@code proxy} when Node control is switched off.
+     */
+    public synchronized void setTier(String requestedTier) {
+        String normalized = "proxy".equalsIgnoreCase(requestedTier) ? "proxy" : "node";
+        if (normalized.equalsIgnoreCase(tier)) {
+            return;
+        }
+        tier = normalized;
+        referralTargets.clear();
+        log.info("Fee tier changed to: {}", normalized);
+        fetchConfiguredCoinFees(configuredReferral);
+    }
+
+    public String getTier() {
+        return tier;
+    }
+
+    /**
      * The fee targets the node reads for a given referral
      * ({@code GET /api/v1/fees/{coin}/targets?referral=<code>}). For the
      * <b>configured</b> referral this serves the live routing state (already
@@ -131,18 +168,27 @@ public class FeeService {
      * real, routable fee split.
      */
     public List<FeeTarget> targetsFor(String coin, String referral) {
+        return targetsFor(coin, referral, null);
+    }
+
+    public List<FeeTarget> targetsFor(String coin, String referral, String tierOverride) {
+        String effectiveTier = tierOverride == null || tierOverride.isBlank()
+                ? tier
+                : ("proxy".equalsIgnoreCase(tierOverride) ? "proxy" : "node");
         String c = coin == null ? "" : coin.toLowerCase(Locale.ROOT);
-        if (configuredReferral.equalsIgnoreCase(referral == null ? "" : referral)) {
+        if (configuredReferral.equalsIgnoreCase(referral == null ? "" : referral) && effectiveTier.equals(tier)) {
             return feeManager.getFeeTargets(c);
         }
-        String key = c + ":" + (referral == null ? "" : referral.trim().toLowerCase(Locale.ROOT));
+        String key = c + ":" + (referral == null ? "" : referral.trim().toLowerCase(Locale.ROOT))
+                + ":" + effectiveTier;
         CachedTargets cached = referralTargets.get(key);
         long now = System.currentTimeMillis();
         if (cached != null && now - cached.loadedAt() < TARGET_CACHE_MS) {
             return cached.targets();
         }
         try {
-            String url = String.format("%s?coin=%s&referral=%s", backendUrl, c, referral == null ? "" : referral);
+            String url = String.format("%s?coin=%s&referral=%s&tier=%s",
+                    backendUrl, c, referral == null ? "" : referral, effectiveTier);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(10))
