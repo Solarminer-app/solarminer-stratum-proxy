@@ -1,5 +1,10 @@
 # Agent work log
 
+## 2026-10-08 — Managed child health identity
+
+- Added `GET /api/health`, returning `service=solarminer-stratum-proxy` and the instance ID supplied through `--proxy.health-instance-id`. The PC-Agent uses it to recognize the child it just launched; the endpoint does not report listener, fee or pool health. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --tests '*ProxyHealthControllerTest' --offline --no-daemon` passed. An updated proxy release is needed before the PC-Agent uses this path instead of its legacy compatibility probe.
+
+
 ## 2026-10-07 — QTC job notification format and real SRBMiner reconnects
 
 - Evidence: two local SRBMiner 3.7.1 QTC GPU consoles showed `PARSE error: Quantus notification has no job object` immediately before reconnection. The same sessions received initial jobs, reached about 350–385 MH/s and logged accepted shares; those miner-native counters are not pool-credit evidence. Earlier RVN/ETC local consoles showed sustained jobs and ended with an explicit Node configuration stop, not a comparable parser failure.
