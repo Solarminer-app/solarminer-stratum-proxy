@@ -112,5 +112,18 @@ public class CurrencySnapshotService {
             return acceptedWorkHashes <= 0 ? 0 : acceptedWorkHashes / networkHashrateHps
                     * (86400.0 / targetBlockSeconds) * blockReward;
         }
+
+        public double usdPerDayFromAcceptedWork(double acceptedWorkHashes) {
+            return estimatedCoinsPerDay(acceptedWorkHashes) * priceUsd;
+        }
+
+        /** What one hash per second held for a full day would earn on this network right now. */
+        public double profitabilityUsdPerDayPerHps() {
+            return 86_400.0 / networkHashrateHps * (86_400.0 / targetBlockSeconds) * blockReward * priceUsd;
+        }
+
+        public double projectedUsdPerDay(double hashrateHps) {
+            return hashrateHps <= 0 ? 0 : profitabilityUsdPerDayPerHps() * hashrateHps;
+        }
     }
 }

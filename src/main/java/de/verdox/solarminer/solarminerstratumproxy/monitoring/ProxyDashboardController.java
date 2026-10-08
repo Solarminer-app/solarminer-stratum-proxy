@@ -18,11 +18,13 @@ public class ProxyDashboardController {
     private final StratumNettyServer server;
     private final ProxyTelemetryService telemetry;
     private final CurrencySnapshotService currency;
+    private final RevenueOverviewService revenueOverview;
 
     public ProxyDashboardController(ProxyProperties properties, FeeManager fees, StratumNettyServer server,
-                                    ProxyTelemetryService telemetry, CurrencySnapshotService currency) {
+                                    ProxyTelemetryService telemetry, CurrencySnapshotService currency,
+                                    RevenueOverviewService revenueOverview) {
         this.properties = properties; this.fees = fees; this.server = server;
-        this.telemetry = telemetry; this.currency = currency;
+        this.telemetry = telemetry; this.currency = currency; this.revenueOverview = revenueOverview;
     }
 
     @GetMapping({"/api/dashboard", "/embedded-dashboard/api/dashboard"})
@@ -51,7 +53,7 @@ public class ProxyDashboardController {
                     snapshot == null ? null : snapshot.stale(),
                     snapshot == null ? null : snapshot.updatedAt(), snapshot == null ? null : value));
         });
-        return new Dashboard(coins, currency.status());
+        return new Dashboard(coins, revenueOverview.overview(), currency.status());
     }
 
     @GetMapping({"/api/dashboard/console", "/embedded-dashboard/api/dashboard/console"})
@@ -60,7 +62,7 @@ public class ProxyDashboardController {
         return telemetry.console(coin, level, limit);
     }
 
-    public record Dashboard(List<Coin> coins, String currencyServiceError) { }
+    public record Dashboard(List<Coin> coins, RevenueOverviewService.Overview overview, String currencyServiceError) { }
     public record Coin(String coin, int port, String listenerStatus, int connectedWorkers, int upstreamConnections,
                        long submittedShares, long acceptedShares, long rejectedShares, double averageAcceptedShareDifficulty,
                        Double estimatedHashrateHps, java.time.Instant sampledAt, List<Target> targets, String ticker,
