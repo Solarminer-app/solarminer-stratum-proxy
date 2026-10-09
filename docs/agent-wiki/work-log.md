@@ -1,5 +1,11 @@
 # Agent work log
 
+
+## 2026-10-08 — Managed child health identity
+
+- Added `GET /api/health`, returning `service=solarminer-stratum-proxy` and the instance ID supplied through `--proxy.health-instance-id`. The PC-Agent uses it to recognize the child it just launched; the endpoint does not report listener, fee or pool health. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --tests '*ProxyHealthControllerTest' --offline --no-daemon` passed. An updated proxy release is needed before the PC-Agent uses this path instead of its legacy compatibility probe.
+
+=======
 ## 2026-10-09 — Revenue projection day-factor correction
 
 - Cause: both dashboard value formulas applied the 86,400-seconds-per-day factor twice. Accepted share work is already a hash count accumulated over the rolling 24-hour window, but `estimatedCoinsPerDay` multiplied it by blocks/day again. The projection similarly converted H/s to one day of work and then multiplied by blocks/day. Realised and projected USD values were therefore 86,400 times too high.
