@@ -1,5 +1,12 @@
 # Agent work log
 
+## 2026-10-09 — Versioned LAN discovery heartbeat
+
+- The proxy now broadcasts its existing discovery payload `{service,protocolVersion,apiPort,coins}` every second to UDP 8092 on physical IPv4 LAN broadcasts. The existing UDP 8091 request/reply listener remains for older PC-Agents.
+- Virtual, Docker, veth, Tailscale and WSL interfaces are excluded; the PC-Agent still treats the packet source as an untrusted candidate and verifies service/version/ports plus `GET /api/network/ip`.
+- Docker image metadata exposes UDP 8092 in addition to the legacy UDP 8091 query port. The managed loopback proxy continues to launch with discovery disabled.
+- Verification: full `gradle test --offline` passed under JDK 21 (45 seconds). No two-host broadcast or firewall test was available.
+
 ## 2026-10-09 — Revenue projection day-factor correction
 
 - Cause: both dashboard value formulas applied the 86,400-seconds-per-day factor twice. Accepted share work is already a hash count accumulated over the rolling 24-hour window, but `estimatedCoinsPerDay` multiplied it by blocks/day again. The projection similarly converted H/s to one day of work and then multiplied by blocks/day. Realised and projected USD values were therefore 86,400 times too high.
