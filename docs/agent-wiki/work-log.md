@@ -1,5 +1,12 @@
 # Agent work log
 
+## 2026-10-09 — Revenue projection day-factor correction
+
+- Cause: both dashboard value formulas applied the 86,400-seconds-per-day factor twice. Accepted share work is already a hash count accumulated over the rolling 24-hour window, but `estimatedCoinsPerDay` multiplied it by blocks/day again. The projection similarly converted H/s to one day of work and then multiplied by blocks/day. Realised and projected USD values were therefore 86,400 times too high.
+- Change: accepted work now uses `acceptedWorkHashes / networkHashrateHps / targetBlockSeconds * blockReward`; projected H/s uses `hashrateHps / networkHashrateHps * (86,400 / targetBlockSeconds) * blockReward`. Currency Service inputs and the dashboard HTTP schema are unchanged.
+- Verification: a regression fixture proves that 100 TH/s on a 1 EH/s network with 600-second blocks, 3.125 coin reward and USD 60,000 price yields USD 2,700/day, and that the equivalent accepted hash count yields the same value. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --offline --no-daemon` passed all 34 tests.
+- Not verified: no running proxy was restarted and no live pool balance or payout was compared. Share-difficulty unit accuracy remains a separate pool/algorithm-specific evidence gate.
+
 ## 2026-10-07 — QTC job notification format and real SRBMiner reconnects
 
 - Evidence: two local SRBMiner 3.7.1 QTC GPU consoles showed `PARSE error: Quantus notification has no job object` immediately before reconnection. The same sessions received initial jobs, reached about 350–385 MH/s and logged accepted shares; those miner-native counters are not pool-credit evidence. Earlier RVN/ETC local consoles showed sustained jobs and ended with an explicit Node configuration stop, not a comparable parser failure.
