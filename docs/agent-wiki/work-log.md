@@ -1,5 +1,18 @@
 # Agent work log
 
+
+## 2026-10-08 — Managed child health identity
+
+- Added `GET /api/health`, returning `service=solarminer-stratum-proxy` and the instance ID supplied through `--proxy.health-instance-id`. The PC-Agent uses it to recognize the child it just launched; the endpoint does not report listener, fee or pool health. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --tests '*ProxyHealthControllerTest' --offline --no-daemon` passed. An updated proxy release is needed before the PC-Agent uses this path instead of its legacy compatibility probe.
+
+=======
+## 2026-10-09 — Revenue projection day-factor correction
+
+- Cause: both dashboard value formulas applied the 86,400-seconds-per-day factor twice. Accepted share work is already a hash count accumulated over the rolling 24-hour window, but `estimatedCoinsPerDay` multiplied it by blocks/day again. The projection similarly converted H/s to one day of work and then multiplied by blocks/day. Realised and projected USD values were therefore 86,400 times too high.
+- Change: accepted work now uses `acceptedWorkHashes / networkHashrateHps / targetBlockSeconds * blockReward`; projected H/s uses `hashrateHps / networkHashrateHps * (86,400 / targetBlockSeconds) * blockReward`. Currency Service inputs and the dashboard HTTP schema are unchanged.
+- Verification: a regression fixture proves that 100 TH/s on a 1 EH/s network with 600-second blocks, 3.125 coin reward and USD 60,000 price yields USD 2,700/day, and that the equivalent accepted hash count yields the same value. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --offline --no-daemon` passed all 34 tests.
+- Not verified: no running proxy was restarted and no live pool balance or payout was compared. Share-difficulty unit accuracy remains a separate pool/algorithm-specific evidence gate.
+
 ## 2026-10-07 — QTC job notification format and real SRBMiner reconnects
 
 - Evidence: two local SRBMiner 3.7.1 QTC GPU consoles showed `PARSE error: Quantus notification has no job object` immediately before reconnection. The same sessions received initial jobs, reached about 350–385 MH/s and logged accepted shares; those miner-native counters are not pool-credit evidence. Earlier RVN/ETC local consoles showed sustained jobs and ended with an explicit Node configuration stop, not a comparable parser failure.
@@ -130,3 +143,19 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
 - Mode is selected by `proxy.fee.roll-mode` (default `random`, documented in `application.properties`) and switchable at runtime via `setRollMode`. Credits survive fee-backend target refreshes (`reconcileRollState` keeps counters for still-present targets, new targets start at zero, removed targets are dropped).
 - Verification: `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test` → BUILD SUCCESSFUL, 32 tests, including the new `FeeManagerRollModeTest` (exact 7.5/2.5/90 split over 10 000 rolls, refresh does not reset the schedule, removed targets dropped, unknown mode normalises to random).
 - Not verified: no live pool session; the per-session `rollNextJobTarget` call sites (BTC/XMR protocols) were not exercised end-to-end. PC-Agent side is documented in the Solar-Miner-Node work log.
+
+## 2026-10-08 — Fee tier plumbing (node/proxy)
+
+- `FeeService` (proxy) holds a volatile `tier` (`solarminer.fee.tier`, default
+  `node`), appends `&tier=` to both fee-backend fetch paths, and exposes
+  `setTier()` which re-fetches immediately and clears the on-demand referral
+  cache — the next rolled job already uses the new split. `FeeController`
+  gained `POST /api/v1/fees/tier` (forcing surface for the PC-Agent/Node) and a
+  `tier` query param on `GET /api/v1/fees/{coin}/targets` so readers see the
+  same split the proxy enforces.
+- Compatibility: without any tier signal the proxy behaves exactly as before
+  (node tier, 2.5%); against an old fee-backend the extra query param is
+  ignored. `FeeManager` needs no change — `updateTargets`/`reconcileRollState`
+  already handle percentage changes without resetting stateful roll credits.
+- Evidence: `sh gradlew test` green (JDK 21), including the existing
+  FeeManager/FeeResponse suites. No live fee-backend probe performed.

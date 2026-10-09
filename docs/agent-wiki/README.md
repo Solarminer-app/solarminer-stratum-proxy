@@ -9,7 +9,9 @@ Checked against `src/main/java` on 2026-10-01. Read [workspace contracts](../../
 | TCP/session lifecycle | `v1/connection/`, `MinerSession` | Own connections, framing and session state; no fee policy. |
 | Coin protocol | `v1/protocol/btc/`, `xmr/`, `pearl/`, `gpu/`, `MiningProtocolFactory` | Parse and emit coin-specific Stratum messages. Add a protocol adapter for a new wire format. |
 | Fee routing | `v1/fee/FeeService`, `FeeManager`, `v1/routing/` | Fetch targets and choose job origin; fee percentages originate in fee-backend. |
-| Discovery and local API | `controller/ProxyDiscoveryServer`, `ProxyNetworkController`, `v1/FeeController` | Advertise and validate the local proxy; do not implement miner-specific discovery in protocol parsers. |
+| Discovery and local API | `controller/ProxyDiscoveryServer`, `ProxyNetworkController`, `ProxyHealthController`, `v1/FeeController` | Advertise and validate the local proxy; do not implement miner-specific discovery in protocol parsers. |
+
+`GET /api/health` returns the service name and the `proxy.health-instance-id` passed at startup. The PC-Agent uses both fields to confirm that its current managed child, rather than another process on the same port, is answering. The endpoint does not certify Stratum listeners, fee routes or pool connectivity.
 
 ## Documentation catalog
 

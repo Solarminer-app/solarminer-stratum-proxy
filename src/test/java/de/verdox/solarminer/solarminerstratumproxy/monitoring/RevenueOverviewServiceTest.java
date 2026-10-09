@@ -23,6 +23,20 @@ class RevenueOverviewServiceTest {
     private static final double SHARE_UNIT = 4_294_967_296d;
 
     @Test
+    void projectionConvertsHashrateToOneDayOfWorkExactlyOnce() {
+        CurrencySnapshotService.Snapshot snapshot = new CurrencySnapshotService.Snapshot(
+                1e18, 1.3e13, 600, 3.125, 60_000, "2026-10-09T00:00:00Z", false, "BTC");
+        double minerHashrateHps = 100e12;
+
+        // 100 TH/s is 0.01% of this fixture network and the network earns 144 blocks/day.
+        double expectedUsdPerDay = minerHashrateHps / 1e18 * 144 * 3.125 * 60_000;
+        assertEquals(2_700d, expectedUsdPerDay, 1e-9);
+        assertEquals(expectedUsdPerDay, snapshot.projectedUsdPerDay(minerHashrateHps), 1e-9);
+        assertEquals(expectedUsdPerDay,
+                snapshot.usdPerDayFromAcceptedWork(minerHashrateHps * 86_400), 1e-9);
+    }
+
+    @Test
     void ranksRunningCoinsByNetworkProfitabilityAndSplitsGrossValueByFeeTarget() throws Exception {
         String networks = """
                 [{"coin":"bitcoin","ticker":"BTC","available":true,"stale":false,"networkHashrateHps":1e18,
@@ -54,13 +68,12 @@ class RevenueOverviewServiceTest {
             assertEquals(List.of("monero", "bitcoin"),
                     overview.coins().stream().map(RevenueOverviewService.CoinRow::coin).toList());
 
-            // Realised revenue divided by the measured hashrate: (86400/120 · 1 XMR · 200 USD · 60 s) / 2e12 H/s
-            assertEquals(4.32e-6, overview.coins().get(0).profitabilityUsdPerDayPerHps(), 1e-9);
-            // (86400/600 · 3.125 BTC · 60000 USD · 60 s) / 1e18 H/s
-            assertEquals(1.62e-9, overview.coins().get(1).profitabilityUsdPerDayPerHps(), 1e-12);
+            // Realised revenue divided by measured hashrate: reward value per network work, over 60 seconds.
+            assertEquals(5e-11, overview.coins().get(0).profitabilityUsdPerDayPerHps(), 1e-15);
+            assertEquals(1.875e-14, overview.coins().get(1).profitabilityUsdPerDayPerHps(), 1e-18);
 
-            double bitcoinShareUsd = 4 * SHARE_UNIT / 1e18 * (86400.0 / 600) * 3.125 * 60000;
-            double moneroUsd = 2 * SHARE_UNIT / 2e12 * (86400.0 / 120) * 1.0 * 200;
+            double bitcoinShareUsd = 4 * SHARE_UNIT / 1e18 / 600 * 3.125 * 60000;
+            double moneroUsd = 2 * SHARE_UNIT / 2e12 / 120 * 1.0 * 200;
             assertEquals(bitcoinShareUsd, overview.houseFeeUsdPer24h(), 1e-9);
             assertEquals(bitcoinShareUsd, overview.referrerFeeUsdPer24h(), 1e-9);
             assertEquals(bitcoinShareUsd + moneroUsd, overview.userPoolUsdPer24h(), 1e-9);
