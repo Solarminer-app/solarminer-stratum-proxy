@@ -177,6 +177,15 @@ jobs:
             "${IMAGE}:${VERSION}-amd64" \
             "${IMAGE}:${VERSION}-arm64"
 
+          # Single-architecture aliases: compose files pin latest-amd64
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest-amd64" \
+            "${IMAGE}:${VERSION}-amd64"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest-arm64" \
+            "${IMAGE}:${VERSION}-arm64"
+
       - name: Inspect published image
         shell: bash
         env:
@@ -186,3 +195,5 @@ jobs:
           set -euo pipefail
 
           docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+          docker buildx imagetools inspect "${IMAGE}:latest-amd64"
+          docker buildx imagetools inspect "${IMAGE}:latest-arm64"

@@ -160,3 +160,9 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
   already handle percentage changes without resetting stateful roll credits.
 - Evidence: `sh gradlew test` green (JDK 21), including the existing
   FeeManager/FeeResponse suites. No live fee-backend probe performed.
+
+## 2026-10-10 — Release-Workflow: Per-Arch-Moving-Tags ergaenzt
+
+- Befund (Docker-Hub-API): `verdox/solar-miner-stratum-proxy` hat production-seitig nur `latest`; `latest-amd64`/`latest-arm64` fehlen, obwohl Node-`compose.yml` und Doku-Beispiele `:latest-amd64` pinnen. Nur `docker-beta.yml` erzeugte `latest-amd64-beta`/`latest-arm64-beta`.
+- Fix in `docker-deploy-proxy.yml`: Manifest-Job publiziert zusaetzlich `latest-amd64`/`latest-arm64` (Alias auf `${VERSION}-amd64`/`-arm64`) plus Inspect-Schritte; entspricht dem Core-Workflow-Fix 8ff88b0 im Node-Repo.
+- Wirksam erst ab dem naechsten `v*`-Release von master; nach Merge von beta nach master und Tag greift der Fix.
