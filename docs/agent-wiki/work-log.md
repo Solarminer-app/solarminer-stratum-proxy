@@ -1,5 +1,11 @@
 # Agent work log
 
+## 2026-10-12 — Pearl dashboard average-hashrate telemetry
+
+- Cause: `ProxyTelemetryService` had no PearlHash share-work unit and only recognized separate `mining.set_difficulty`-style messages. Pearl instead sends the current VarDiff value in the trailing numeric job-ID segment of `mining.notify`; Kryptex's default PRL endpoint uses a documented static difficulty of 2,097,152. Consequently, accepted Pearl shares retained zero work and the dashboard correctly withheld, but never displayed, its 15-minute average hashrate.
+- Change: accepted Pearl shares now convert their difficulty with the standard `2^32` expected-hash share unit. The proxy reads the numeric Pearl job-ID suffix for VarDiff pools and, only for the selected `*.kryptex.network` user route without such a suffix, uses Kryptex's published default. Unknown Pearl pools without an explicit difficulty remain unestimated rather than guessed. This changes dashboard telemetry only; no Stratum message, credentials, fee route, accounting or UI copy changed.
+- Verification: `ProxyTelemetryServiceTest` covers a VarDiff job ID and an opaque Kryptex job ID through submit/accepted-response accounting; both produce an average difficulty and non-null rate. Run the full proxy test suite before rollout. No live pool session, accepted pool credit, fee routing or payout was performed in this change.
+
 ## 2026-10-09 — Versioned LAN discovery heartbeat
 
 - The proxy now broadcasts its existing discovery payload `{service,protocolVersion,apiPort,coins}` every second to UDP 8092 on physical IPv4 LAN broadcasts. The existing UDP 8091 request/reply listener remains for older PC-Agents.

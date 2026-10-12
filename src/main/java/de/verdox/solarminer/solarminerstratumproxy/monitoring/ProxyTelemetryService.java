@@ -24,6 +24,8 @@ public class ProxyTelemetryService {
     private static final int EVENT_LIMIT = 500;
     private static final Duration HISTORY = Duration.ofHours(24);
     private static final Duration RATE_WINDOW = Duration.ofMinutes(15);
+    /** Kryptex publishes this as its PearlHash share difficulty on the default PRL endpoint. */
+    private static final double KRYPTEX_PEARL_DIFFICULTY = 2_097_152d;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Map<String, Session> sessions = new HashMap<>();
@@ -33,6 +35,7 @@ public class ProxyTelemetryService {
     private final Map<String, Double> difficultyUnits = Map.of(
             "bitcoin", 4_294_967_296d,
             "monero", 4_294_967_296d,
+            "pearl", 4_294_967_296d,
             "ravencoin", 4_294_967_296d,
             "ethereumclassic", 4_294_967_296d,
             "decred", 4_294_967_296d,
@@ -89,6 +92,9 @@ public class ProxyTelemetryService {
             JsonNode message = MAPPER.readTree(raw);
             String method = message.path("method").asText("");
             double difficulty = difficulty(message, method);
+            if (difficulty <= 0 && "pearl".equals(session.coin) && "mining.notify".equals(method)) {
+                difficulty = pearlDifficulty(message, session, targetId);
+            }
             if (difficulty > 0 && Double.isFinite(difficulty)) session.difficulties.put(targetId, difficulty);
         } catch (Exception ignored) { }
     }
@@ -259,6 +265,26 @@ public class ProxyTelemetryService {
             if (value > 0) return value;
         }
         return 0;
+    }
+
+    /**
+     * Pearl conveys a VarDiff value in the trailing numeric portion of its job ID,
+     * rather than in a separate mining.set_difficulty notification. Kryptex's
+     * default Pearl endpoint has a documented static difficulty, so it has no
+     * per-job value to parse.
+     */
+    private static double pearlDifficulty(JsonNode message, Session session, String targetId) {
+        String jobId = message.path("params").path("job_id").asText("");
+        int separator = jobId.lastIndexOf('_');
+        if (separator >= 0 && separator < jobId.length() - 1) {
+            try {
+                double parsed = Double.parseDouble(jobId.substring(separator + 1));
+                if (parsed > 0 && Double.isFinite(parsed)) return parsed;
+            } catch (NumberFormatException ignored) { }
+        }
+        return FeeManager.USER_TARGET_ID.equals(targetId) && session.userPool != null
+                && session.userPool.startsWith("prl") && session.userPool.contains(".kryptex.network:")
+                ? KRYPTEX_PEARL_DIFFICULTY : 0;
     }
 
     private static double numeric(JsonNode node) {
