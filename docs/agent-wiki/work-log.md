@@ -1,11 +1,22 @@
 # Agent work log
 
+## 2026-10-12 — Pearl dashboard average-hashrate telemetry
+
+- Cause: `ProxyTelemetryService` had no PearlHash share-work unit and only recognized separate `mining.set_difficulty`-style messages. Pearl instead sends the current VarDiff value in the trailing numeric job-ID segment of `mining.notify`; Kryptex's default PRL endpoint uses a documented static difficulty of 2,097,152. Consequently, accepted Pearl shares retained zero work and the dashboard correctly withheld, but never displayed, its 15-minute average hashrate.
+- Change: accepted Pearl shares now convert their difficulty with the standard `2^32` expected-hash share unit. The proxy reads the numeric Pearl job-ID suffix for VarDiff pools and, only for the selected `*.kryptex.network` user route without such a suffix, uses Kryptex's published default. Unknown Pearl pools without an explicit difficulty remain unestimated rather than guessed. This changes dashboard telemetry only; no Stratum message, credentials, fee route, accounting or UI copy changed.
+- Verification: `ProxyTelemetryServiceTest` covers a VarDiff job ID and an opaque Kryptex job ID through submit/accepted-response accounting; both produce an average difficulty and non-null rate. Run the full proxy test suite before rollout. No live pool session, accepted pool credit, fee routing or payout was performed in this change.
+
+## 2026-10-09 — Versioned LAN discovery heartbeat
+
+- The proxy now broadcasts its existing discovery payload `{service,protocolVersion,apiPort,coins}` every second to UDP 8092 on physical IPv4 LAN broadcasts. The existing UDP 8091 request/reply listener remains for older PC-Agents.
+- Virtual, Docker, veth, Tailscale and WSL interfaces are excluded; the PC-Agent still treats the packet source as an untrusted candidate and verifies service/version/ports plus `GET /api/network/ip`.
+- Docker image metadata exposes UDP 8092 in addition to the legacy UDP 8091 query port. The managed loopback proxy continues to launch with discovery disabled.
+- Verification: full `gradle test --offline` passed under JDK 21 (45 seconds). No two-host broadcast or firewall test was available.
 
 ## 2026-10-08 — Managed child health identity
 
 - Added `GET /api/health`, returning `service=solarminer-stratum-proxy` and the instance ID supplied through `--proxy.health-instance-id`. The PC-Agent uses it to recognize the child it just launched; the endpoint does not report listener, fee or pool health. `JAVA_HOME=/home/lukas/.jdks/graalvm-ce-21.0.2 sh gradlew test --tests '*ProxyHealthControllerTest' --offline --no-daemon` passed. An updated proxy release is needed before the PC-Agent uses this path instead of its legacy compatibility probe.
 
-=======
 ## 2026-10-09 — Revenue projection day-factor correction
 
 - Cause: both dashboard value formulas applied the 86,400-seconds-per-day factor twice. Accepted share work is already a hash count accumulated over the rolling 24-hour window, but `estimatedCoinsPerDay` multiplied it by blocks/day again. The projection similarly converted H/s to one day of work and then multiplied by blocks/day. Realised and projected USD values were therefore 86,400 times too high.
@@ -159,3 +170,9 @@ Append dated entries for protocol, fee or discovery changes: owner, wire shape, 
   already handle percentage changes without resetting stateful roll credits.
 - Evidence: `sh gradlew test` green (JDK 21), including the existing
   FeeManager/FeeResponse suites. No live fee-backend probe performed.
+
+## 2026-10-10 — Release-Workflow: Per-Arch-Moving-Tags ergaenzt
+
+- Befund (Docker-Hub-API): `verdox/solar-miner-stratum-proxy` hat production-seitig nur `latest`; `latest-amd64`/`latest-arm64` fehlen, obwohl Node-`compose.yml` und Doku-Beispiele `:latest-amd64` pinnen. Nur `docker-beta.yml` erzeugte `latest-amd64-beta`/`latest-arm64-beta`.
+- Fix in `docker-deploy-proxy.yml`: Manifest-Job publiziert zusaetzlich `latest-amd64`/`latest-arm64` (Alias auf `${VERSION}-amd64`/`-arm64`) plus Inspect-Schritte; entspricht dem Core-Workflow-Fix 8ff88b0 im Node-Repo.
+- Wirksam erst ab dem naechsten `v*`-Release von master; nach Merge von beta nach master und Tag greift der Fix.
